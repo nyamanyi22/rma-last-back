@@ -3,7 +3,10 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\Admin\ProductController;
+use App\Http\Controllers\Api\Admin\SaleController; // 👈 ADD THIS IMPORT!
+use App\Http\Controllers\Api\Admin\CustomerController;
 use Illuminate\Support\Facades\Route;
+
 
 // Public routes (no authentication required)
 Route::post('/register', [AuthController::class , 'register']);
@@ -19,6 +22,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Profile routes (Global)
     Route::put('/profile', [ProfileController::class , 'update']);
+
+    // 👇 CUSTOMER SALES - Any authenticated user can see their own purchases
+    Route::get('/my-sales', [SaleController::class , 'mySales']);
 
     // Customer routes (role: customer)
     Route::middleware('role:customer')->prefix('customer')->group(function () {
@@ -46,7 +52,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
                 // Product Management
                 Route::prefix('products')->group(function () {
-                    // Lookup routes (MUST come before {product} to avoid matching as ID)
+                    // Lookup routes (MUST come before {product})
                     Route::get('/categories', [ProductController::class , 'getCategories']);
                     Route::get('/brands', [ProductController::class , 'getBrands']);
 
@@ -60,6 +66,37 @@ Route::middleware('auth:sanctum')->group(function () {
                     Route::get('/{product}', [ProductController::class , 'show']);
                     Route::put('/{product}', [ProductController::class , 'update']);
                     Route::delete('/{product}', [ProductController::class , 'destroy']);
+                }
+                );
+
+                // 👇 SALES MANAGEMENT ROUTES (Admin only)
+                Route::prefix('sales')->group(function () {
+                    // List all sales (with filters)
+                    Route::get('/', [SaleController::class , 'index']);
+
+                    // Create new sale
+                    Route::post('/', [SaleController::class , 'store']);
+
+                    // Bulk import sales
+                    Route::post('/import', [SaleController::class , 'import']);
+
+                    // Export sales to CSV
+                    Route::get('/export', [SaleController::class , 'export']);
+
+                    // Link unlinked sales to user by email
+                    Route::post('/link-to-user', [SaleController::class , 'linkToUser']);
+
+                    // Single sale operations
+                    Route::get('/{sale}', [SaleController::class , 'show']);
+                    Route::put('/{sale}', [SaleController::class , 'update']);
+                    Route::delete('/{sale}', [SaleController::class , 'destroy']);
+                }
+                );
+
+                // 👇 CUSTOMER MANAGEMENT ROUTES (Admin only)
+                Route::prefix('customers')->group(function () {
+                    Route::get('/', [CustomerController::class , 'index']); // /admin/customers
+                    Route::get('/{id}', [CustomerController::class , 'show']); // /admin/customers/5
                 }
                 );
             }

@@ -14,7 +14,10 @@ return new class extends Migration
         Schema::create('sales', function (Blueprint $table) {
             $table->id();
             $table->string('invoice_number')->unique();
-            $table->foreignId('customer_id')->constrained('users');
+            $table->string('customer_email'); // ← For lookup
+            $table->foreignId('customer_id')->nullable() // ← For relationship
+                ->constrained('users')
+                ->nullOnDelete();
             $table->foreignId('product_id')->constrained('products');
             $table->date('sale_date');
             $table->decimal('amount', 10, 2);
