@@ -4,32 +4,36 @@ namespace App\Services;
 
 use App\Models\RMARequest;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 
 class RMANumberGenerator
 {
-    /**
-     * Generate a unique RMA number.
-     * Format: RMA-YYYY-0001
-     *
-     * @return string
-     */
     public static function generate(): string
     {
-        $year = Carbon::now()->year;
-        $prefix = "RMA-{$year}-";
+        return self::generateForDate(Carbon::now());
+    }
 
-        $lastRMA = RMARequest::where('rma_number', 'like', "{$prefix}%")
-            ->orderBy('rma_number', 'desc')
-            ->first();
+    public static function generateForDate(Carbon $date): string
+    {
+        $prefix = "RMA-" . $date->format('Ym') . "-";
 
-        if (!$lastRMA) {
-            $number = 1;
-        }
-        else {
-            $lastNumber = (int)str_replace($prefix, '', $lastRMA->rma_number);
-            $number = $lastNumber + 1;
-        }
+        return DB::transaction(function () use ($prefix) {
 
-        return $prefix . str_pad($number, 4, '0', STR_PAD_LEFT);
+            $lastRMA = RMARequest::where('rma_number', 'like', $prefix . '%')
+                ->orderBy('rma_number', 'desc')
+                ->lockForUpdate()
+                ->first();
+
+            $sequence = 1;
+
+            if ($lastRMA) {
+                // Extract last 4 digits safely using regex
+                if (preg_match('/(\d{4})$/', $lastRMA->rma_number, $matches)) {
+                    $sequence = ((int) $matches[1]) + 1;
+                }
+            }
+
+            return $prefix . str_pad($sequence, 4, '0', STR_PAD_LEFT);
+        });
     }
 }

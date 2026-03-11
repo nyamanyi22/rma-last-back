@@ -90,15 +90,15 @@ class User extends Authenticatable
     protected function fullName(): Attribute
     {
         return Attribute::make(
-            get: fn () => trim("{$this->first_name} {$this->last_name}"),
+            get: fn() => trim("{$this->first_name} {$this->last_name}"),
         );
     }
 
     protected function initials(): Attribute
     {
         return Attribute::make(
-            get: fn () => strtoupper(
-                substr($this->first_name, 0, 1) . 
+            get: fn() => strtoupper(
+                substr($this->first_name, 0, 1) .
                 substr($this->last_name, 0, 1)
             ),
         );
@@ -274,6 +274,13 @@ class User extends Authenticatable
             if (empty($user->role)) {
                 $user->role = UserRole::CUSTOMER->value;
             }
+        });
+
+        // Auto-link existing sales to new user by email
+        static::created(function ($user) {
+            \App\Models\Sale::where('customer_email', trim($user->email))
+                ->whereNull('customer_id')
+                ->update(['customer_id' => $user->id]);
         });
     }
 }

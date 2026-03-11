@@ -5,25 +5,51 @@ namespace App\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Product;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rule;
 
 class ProductController extends Controller
 {
+    /**
+     * Display a listing of products.
+     */
     public function index(Request $request)
     {
-        $products = Product::query()
-            ->when($request->search, function ($query, $search) {
-            $query->where('name', 'like', "%{$search}%")
-                ->orWhere('sku', 'like', "%{$search}%");
-        })
-            ->when($request->category, function ($query, $category) {
-            $query->where('category', $category);
-        })
-            ->when($request->has('is_active'), function ($query) use ($request) {
-            $query->where('is_active', filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN));
-        })
-            ->latest()
-            ->paginate($request->per_page ?? 15);
+        $query = Product::query();
+
+        // Filter by category
+        if ($request->has('category')) {
+            $query->where('category', $request->category);
+        }
+
+        // Filter by brand
+        if ($request->has('brand')) {
+            $query->where('brand', $request->brand);
+        }
+
+        // Filter by active status
+        if ($request->has('is_active')) {
+            $query->where('is_active', $request->boolean('is_active'));
+        }
+
+        // Search by name or SKU
+        if ($request->has('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%")
+                    ->orWhere('sku', 'like', "%{$search}%")
+                    ->orWhere('brand', 'like', "%{$search}%");
+            });
+        }
+
+        // Sort
+        $sortField = $request->get('sort_by', 'created_at');
+        $sortDirection = $request->get('sort_direction', 'desc');
+        $query->orderBy($sortField, $sortDirection);
+
+        // Pagination
+        $perPage = $request->get('per_page', 15);
+        $products = $query->paginate($perPage);
 
         return response()->json([
             'success' => true,
@@ -32,24 +58,31 @@ class ProductController extends Controller
     }
 
     /**
-     * Store a newly created resource in storage.
+     * Store a newly created product.
      */
     public function store(Request $request)
     {
-        $validated = $request->validate([
-            'sku' => 'required|string|unique:products,sku',
+        $validator = Validator::make($request->all(), [
+            'sku' => 'required|string|unique:products,sku|max:50',
             'name' => 'required|string|max:255',
             'description' => 'nullable|string',
-            'category' => 'required|string|max:255',
-            'brand' => 'required|string|max:255',
-            'default_warranty_months' => 'required|integer|min:0',
+            'category' => 'required|string|max:100',
+            'brand' => 'required|string|max:100',
+            'default_warranty_months' => 'nullable|integer|min:0|max:120',
             'price' => 'nullable|numeric|min:0',
-            'stock_quantity' => 'required|integer|min:0',
-            'specifications' => 'nullable|array',
+            'stock_quantity' => 'nullable|integer|min:0',
+            'specifications' => 'nullable|json',
             'is_active' => 'boolean',
         ]);
 
-        $product = Product::create($validated);
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $product = Product::create($validator->validated());
 
         return response()->json([
             'success' => true,
@@ -59,7 +92,7 @@ class ProductController extends Controller
     }
 
     /**
-     * Display the specified resource.
+     * Display the specified product.
      */
     public function show(Product $product)
     {
@@ -70,28 +103,31 @@ class ProductController extends Controller
     }
 
     /**
-     * Update the specified resource in storage.
+     * Update the specified product.
      */
     public function update(Request $request, Product $product)
     {
-        $validated = $request->validate([
-            'sku' => [
-                'required',
-                'string',
-                Rule::unique('products', 'sku')->ignore($product->id),
-            ],
+        $validator = Validator::make($request->all(), [
+            'sku' => ['required', 'string', 'max:50', Rule::unique('products')->ignore($product->id)],
             'name' => 'required|string|max:255',
             'description' => 'nullable|string',
-            'category' => 'required|string|max:255',
-            'brand' => 'required|string|max:255',
-            'default_warranty_months' => 'required|integer|min:0',
+            'category' => 'required|string|max:100',
+            'brand' => 'required|string|max:100',
+            'default_warranty_months' => 'nullable|integer|min:0|max:120',
             'price' => 'nullable|numeric|min:0',
-            'stock_quantity' => 'required|integer|min:0',
-            'specifications' => 'nullable|array',
+            'stock_quantity' => 'nullable|integer|min:0',
+            'specifications' => 'nullable|json',
             'is_active' => 'boolean',
         ]);
 
-        $product->update($validated);
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $product->update($validator->validated());
 
         return response()->json([
             'success' => true,
@@ -101,7 +137,7 @@ class ProductController extends Controller
     }
 
     /**
-     * Remove the specified resource from storage.
+     * Remove the specified product.
      */
     public function destroy(Product $product)
     {
@@ -113,54 +149,35 @@ class ProductController extends Controller
         ]);
     }
 
+    /**
+     * Get all categories.
+     */
     public function getCategories()
     {
-        $categories = Product::distinct()->pluck('category');
+        $categories = Product::select('category')
+            ->distinct()
+            ->orderBy('category')
+            ->pluck('category');
+
         return response()->json([
             'success' => true,
             'data' => $categories
         ]);
     }
 
+    /**
+     * Get all brands.
+     */
     public function getBrands()
     {
-        $brands = Product::distinct()->pluck('brand');
+        $brands = Product::select('brand')
+            ->distinct()
+            ->orderBy('brand')
+            ->pluck('brand');
+
         return response()->json([
             'success' => true,
             'data' => $brands
-        ]);
-    }
-
-    public function bulkDelete(Request $request)
-    {
-        $request->validate([
-            'ids' => 'required|array',
-            'ids.*' => 'exists:products,id',
-        ]);
-
-        Product::whereIn('id', $request->ids)->delete();
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Products deleted successfully'
-        ]);
-    }
-
-    public function bulkUpdateStatus(Request $request)
-    {
-        $request->validate([
-            'ids' => 'required|array',
-            'ids.*' => 'exists:products,id',
-            'is_active' => 'required|boolean',
-        ]);
-
-        Product::whereIn('id', $request->ids)->update([
-            'is_active' => $request->is_active
-        ]);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Product statuses updated successfully'
         ]);
     }
 }

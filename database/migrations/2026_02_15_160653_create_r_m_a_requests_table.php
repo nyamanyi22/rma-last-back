@@ -4,8 +4,7 @@ use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
-return new class extends Migration 
-{
+return new class extends Migration {
     /**
      * Run the migrations.
      */
@@ -25,7 +24,6 @@ return new class extends Migration
             $table->string('serial_number_provided')->nullable();
             $table->string('receipt_number')->nullable();
             $table->text('issue_description');
-            $table->json('attachments')->nullable();
             $table->string('status')->default('pending'); // Enum RMAStatus
             $table->string('priority')->default('medium'); // Enum RMAPriority
             $table->text('rejection_reason')->nullable();
@@ -39,6 +37,14 @@ return new class extends Migration
             $table->timestamp('delivered_at')->nullable();
             $table->timestamps();
             $table->softDeletes();
+            // Add these indexes for faster queries
+            $table->index('rma_number');
+            $table->index('customer_id');
+            $table->index('status');
+            $table->index('created_at');
+            $table->index(
+                ['customer_id', 'status']
+            );
         });
     }
 
