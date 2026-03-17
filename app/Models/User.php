@@ -35,6 +35,7 @@ class User extends Authenticatable
         'is_active',
         'created_by',
         'email_verified_at',
+        'verification_token',
         'last_login_at',
     ];
 
@@ -230,13 +231,13 @@ class User extends Authenticatable
 
     public function markEmailAsVerified(): void
     {
-        $this->email_verified_at = now();
+        $this->email_verified_at = \Illuminate\Support\Carbon::now();
         $this->save();
     }
 
     public function updateLastLogin(): void
     {
-        $this->last_login_at = now();
+        $this->last_login_at = \Illuminate\Support\Carbon::now();
         $this->save();
     }
 

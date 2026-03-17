@@ -14,93 +14,88 @@ class ReportController extends Controller
 {
     public function getDashboardOverview(Request $request)
     {
-        $today = Carbon::today();
-        $startOfWeek = Carbon::now()->startOfWeek();
-        $startOfMonth = Carbon::now()->startOfMonth();
-        $thirtyDaysAgo = Carbon::now()->subDays(30);
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'totals'                  => $this->getTotals(),
+                'status_breakdown'        => $this->getStatusBreakdown(),
+                'trend_line'              => $this->getTrendLine(),
+                'avg_processing_time_days'=> $this->getAvgProcessingTime(),
+                'top_reasons'             => $this->getTopReasons(),
+                'top_products'            => $this->getTopProducts(),
+            ]
+        ]);
+    }
 
-        // 1. Total RMAs
-        $totals = [
-            'today' => RMARequest::whereDate('created_at', clone $today)->count(),
-            'week' => RMARequest::where('created_at', '>=', $startOfWeek)->count(),
-            'month' => RMARequest::where('created_at', '>=', $startOfMonth)->count(),
+    private function getTotals(): array
+    {
+        return [
+            'today'    => RMARequest::whereDate('created_at', Carbon::today())->count(),
+            'week'     => RMARequest::where('created_at', '>=', Carbon::now()->startOfWeek())->count(),
+            'month'    => RMARequest::where('created_at', '>=', Carbon::now()->startOfMonth())->count(),
             'all_time' => RMARequest::count(),
         ];
+    }
 
-        // 2. Status Breakdown
-        $statusBreakdown = RMARequest::select('status', DB::raw('count(*) as count'))
+    private function getStatusBreakdown()
+    {
+        return RMARequest::select('status', DB::raw('count(*) as count'))
             ->groupBy('status')
             ->get()
-            ->map(function ($item) {
-                return [
-                    'status' => $item->status,
-                    'count' => $item->count,
-                ];
-            });
+            ->map(fn($item) => ['status' => $item->status, 'count' => $item->count]);
+    }
 
-        // 3. Trend Line (Last 30 Days)
+    private function getTrendLine()
+    {
         $trendDates = collect();
         for ($i = 29; $i >= 0; $i--) {
             $trendDates->push(Carbon::now()->subDays($i)->format('Y-m-d'));
         }
 
         $trendsData = RMARequest::select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as count'))
-            ->where('created_at', '>=', clone $thirtyDaysAgo)
+            ->where('created_at', '>=', Carbon::now()->subDays(30))
             ->groupBy(DB::raw('DATE(created_at)'))
             ->pluck('count', 'date');
 
-        $trendLine = $trendDates->map(function ($date) use ($trendsData) {
-            return [
-                'date' => $date,
-                'count' => $trendsData->get($date, 0)
-            ];
-        });
+        return $trendDates->map(fn($date) => ['date' => $date, 'count' => $trendsData->get($date, 0)]);
+    }
 
-        // 4. Average Processing Time (Completed/Rejected RMAs)
-        $completedStatuses = [RMAStatus::COMPLETED->value, RMAStatus::REJECTED->value];
-        $completedRmas = RMARequest::whereIn('status', $completedStatuses)->get();
-        if ($completedRmas->count() > 0) {
-            $totalDays = $completedRmas->sum(function ($rma) {
-                return $rma->created_at->diffInDays($rma->updated_at);
-            });
-            $avgProcessingTime = round($totalDays / $completedRmas->count(), 1);
-        } else {
-            $avgProcessingTime = 0;
+    private function getAvgProcessingTime(): float
+    {
+        $statuses = [RMAStatus::COMPLETED->value, RMAStatus::REJECTED->value];
+        $rmas = RMARequest::whereIn('status', $statuses)->get();
+
+        if ($rmas->count() === 0) {
+            return 0;
         }
 
-        // 5. Top 5 Reasons
-        $topReasons = RMARequest::select('reason', DB::raw('count(*) as count'))
+        $totalDays = $rmas->sum(fn($rma) => $rma->created_at->diffInDays($rma->updated_at));
+
+        return round($totalDays / $rmas->count(), 1);
+    }
+
+    private function getTopReasons()
+    {
+        return RMARequest::select('reason', DB::raw('count(*) as count'))
             ->groupBy('reason')
             ->orderByDesc('count')
             ->limit(5)
             ->get();
+    }
 
-        // 6. Top 5 Returned Products
-        $topProducts = RMARequest::select('product_id', DB::raw('count(*) as count'))
+    private function getTopProducts()
+    {
+        return RMARequest::select('product_id', DB::raw('count(*) as count'))
             ->with('product:id,name')
             ->groupBy('product_id')
             ->orderByDesc('count')
             ->limit(5)
             ->get()
-            ->map(function ($item) {
-                return [
-                    'product_id' => $item->product_id,
-                    'name' => $item->product ? $item->product->name : 'Unknown Product',
-                    'count' => $item->count
-                ];
-            });
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'totals' => $totals,
-                'status_breakdown' => $statusBreakdown,
-                'trend_line' => $trendLine,
-                'avg_processing_time_days' => $avgProcessingTime,
-                'top_reasons' => $topReasons,
-                'top_products' => $topProducts,
-            ]
-        ]);
+            ->map(fn($item) => [
+                'product_id' => $item->product_id,
+                'name'       => $item->product ? $item->product->name : 'Unknown Product',
+                'count'      => $item->count,
+            ]);
     }
 
     public function exportRmasToCsv(Request $request)

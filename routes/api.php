@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\Admin\CustomerController;
 use App\Http\Controllers\Api\Client\RMAController;
 use App\Http\Controllers\Api\Admin\AdminRMAController;
 use App\Http\Controllers\Api\Admin\ReportController;
+use App\Http\Controllers\Api\Admin\SuperAdminController;
 use Illuminate\Support\Facades\Route;
 
 
@@ -15,6 +16,10 @@ use Illuminate\Support\Facades\Route;
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/staff/login', [AuthController::class, 'staffLogin']);
+Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
+Route::post('/reset-password', [AuthController::class, 'resetPassword']);
+Route::post('/verify-email', [AuthController::class, 'verify']);
+Route::post('/resend-verification', [AuthController::class, 'resendVerificationEmail']);
 
 // Protected routes (require authentication)
 Route::middleware('auth:sanctum')->group(function () {
@@ -28,6 +33,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/products/{product}', [ProductController::class, 'show']);
 
     // Profile routes (Global)
+    Route::get('/profile', [ProfileController::class, 'show']);
     Route::put('/profile', [ProfileController::class, 'update']);
 
 
@@ -38,11 +44,7 @@ Route::middleware('auth:sanctum')->group(function () {
         });
 
         // Customer's own profile management
-        Route::prefix('profile')->group(function () {
-            Route::get('/', [ProfileController::class, 'show']);
-            Route::put('/', [ProfileController::class, 'update']);
-            Route::delete('/', [ProfileController::class, 'destroy']);
-        });
+        // (Now handled by global /profile routes)
 
         // CUSTOMER SALES 
         Route::get('/my-sales', [SaleController::class, 'mySales']);
@@ -169,8 +171,15 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Super Admin only routes
     Route::middleware('role:super_admin')->prefix('super-admin')->group(function () {
-        Route::get('/dashboard', function () {
-            return response()->json(['message' => 'Super Admin dashboard']);
+        // Dashboard overview stats
+        Route::get('/overview', [SuperAdminController::class, 'overview']);
+
+        // Staff management (CRUD)
+        Route::prefix('staff')->group(function () {
+            Route::get('/', [SuperAdminController::class, 'getStaff']);
+            Route::post('/', [SuperAdminController::class, 'createStaff']);
+            Route::put('/{id}', [SuperAdminController::class, 'updateStaff']);
+            Route::delete('/{id}', [SuperAdminController::class, 'deleteStaff']);
         });
     });
 });

@@ -127,6 +127,20 @@ class RMARequest extends Model
     {
         return $this->status === RMAStatus::REJECTED;
     }
+    public function isInRepair()
+    {
+        return $this->status === RMAStatus::IN_REPAIR;
+    }
+
+    public function isShipped()
+    {
+        return $this->status === RMAStatus::SHIPPED;
+    }
+
+    public function isCompleted()
+    {
+        return $this->status === RMAStatus::COMPLETED;
+    }
     // Helper to get all attachment URLs
     public function getAttachmentUrlsAttribute(): array
     {

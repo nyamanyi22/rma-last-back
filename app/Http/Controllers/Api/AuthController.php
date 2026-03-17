@@ -7,6 +7,11 @@ use App\Models\User;
 use App\Enums\UserRole;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use App\Mail\WelcomeVerification;
+use App\Mail\PasswordResetMail;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -40,6 +45,14 @@ class AuthController extends Controller
         ]);
 
         $token = $user->createToken('auth_token')->plainTextToken;
+
+        // Send Welcome/Verification Email
+        $verificationToken = Str::random(64);
+        $user->update(['verification_token' => $verificationToken]);
+        
+        $verificationUrl = config('app.frontend_url', 'http://localhost:3000') . '/verify-email?token=' . $verificationToken . '&email=' . urlencode($user->email);
+        
+        Mail::to($user)->send(new WelcomeVerification($user, $verificationUrl));
 
         return response()->json([
             'access_token' => $token,
@@ -114,5 +127,112 @@ class AuthController extends Controller
     public function me(Request $request)
     {
         return response()->json($request->user());
+    }
+
+    public function forgotPassword(Request $request)
+    {
+        $request->validate(['email' => 'required|email']);
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            // We return success even if user not found for security (probing)
+            return response()->json(['message' => 'Reset link sent if account exists.']);
+        }
+
+        $token = Str::random(64);
+
+        DB::table('password_reset_tokens')->updateOrInsert(
+            ['email' => $user->email],
+            ['token' => Hash::make($token), 'created_at' => now()]
+        );
+
+        $resetUrl = config('app.frontend_url', 'http://localhost:3000') . '/reset-password?token=' . $token . '&email=' . urlencode($user->email);
+
+        Mail::to($user)->send(new PasswordResetMail($user, $resetUrl));
+
+        return response()->json(['message' => 'Password reset link sent to your email.']);
+    }
+
+    public function resetPassword(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|email',
+            'token' => 'required|string',
+            'password' => 'required|string|min:8|confirmed',
+        ]);
+
+        $reset = DB::table('password_reset_tokens')->where('email', $request->email)->first();
+
+        if (!$reset || !Hash::check($request->token, $reset->token)) {
+            return response()->json(['message' => 'Invalid token or email.'], 422);
+        }
+
+        // Check if token expired (e.g. 60 mins)
+        if (now()->subMinutes(60)->gt($reset->created_at)) {
+             return response()->json(['message' => 'Token has expired.'], 422);
+        }
+
+        $user = User::where('email', $request->email)->first();
+        if ($user) {
+            $user->password = Hash::make($request->password);
+            $user->save();
+
+            DB::table('password_reset_tokens')->where('email', $request->email)->delete();
+
+            return response()->json(['message' => 'Password has been reset successfully.']);
+        }
+
+        return response()->json(['message' => 'User not found.'], 404);
+    }
+
+    public function verify(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|email',
+            'token' => 'required|string',
+        ]);
+
+        $user = User::where('email', $request->email)
+            ->where('verification_token', $request->token)
+            ->first();
+
+        if (!$user) {
+            return response()->json(['message' => 'Invalid verification link or email.'], 422);
+        }
+
+        if ($user->hasVerifiedEmail()) {
+            return response()->json(['message' => 'Email already verified.']);
+        }
+
+        $user->email_verified_at = now();
+        $user->verification_token = null;
+        $user->save();
+
+        return response()->json(['message' => 'Email verified successfully.']);
+    }
+
+    public function resendVerificationEmail(Request $request)
+    {
+        $request->validate(['email' => 'required|email']);
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json(['message' => 'Account not found.'], 404);
+        }
+
+        if ($user->hasVerifiedEmail()) {
+            return response()->json(['message' => 'Email already verified.']);
+        }
+
+        $verificationToken = Str::random(64);
+        $user->update(['verification_token' => $verificationToken]);
+
+        $verificationUrl = config('app.frontend_url', 'http://localhost:3000') . '/verify-email?token=' . $verificationToken . '&email=' . urlencode($user->email);
+        
+        Mail::to($user)->send(new WelcomeVerification($user, $verificationUrl));
+
+        return response()->json(['message' => 'Verification email resent.']);
     }
 }

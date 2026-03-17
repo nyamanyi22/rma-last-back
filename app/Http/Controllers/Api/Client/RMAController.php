@@ -8,6 +8,7 @@ use App\Models\RMAComment;
 use App\Models\RmaAttachment;
 use App\Enums\RMAStatus;
 use App\Services\FileUploadService;
+use App\Services\NotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -15,10 +16,12 @@ use Illuminate\Support\Facades\Log;
 class RMAController extends Controller
 {
     protected $fileUploadService;
+    protected $notificationService;
 
-    public function __construct(FileUploadService $fileUploadService)
+    public function __construct(FileUploadService $fileUploadService, NotificationService $notificationService)
     {
         $this->fileUploadService = $fileUploadService;
+        $this->notificationService = $notificationService;
     }
 
     /**
@@ -154,8 +157,13 @@ class RMAController extends Controller
             $uploadedAttachments = [];
 
             // Handle file uploads
+            // Inside RMAController @store
             if ($request->hasFile('attachments')) {
-                foreach ($request->file('attachments') as $file) {
+                $files = $request->file('attachments');
+                // Ensure we're dealing with an array (handles single vs multiple)
+                $files = is_array($files) ? $files : [$files];
+
+                foreach ($files as $file) {
                     try {
                         $uploaded = $this->fileUploadService->uploadToCloudinary(
                             $file,
@@ -163,25 +171,40 @@ class RMAController extends Controller
                             $rma->id
                         );
 
-                        $attachment = $rma->attachments()->create($uploaded);
+                        // Manually map to ensure JSON encoding for metadata if needed
+                        $attachment = $rma->attachments()->create([
+                            'uploaded_by' => $uploaded['uploaded_by'],
+                            'original_name' => $uploaded['original_name'],
+                            'mime_type' => $uploaded['mime_type'],
+                            'file_size' => $uploaded['file_size'],
+                            'cloudinary_public_id' => $uploaded['cloudinary_public_id'],
+                            'cloudinary_url' => $uploaded['cloudinary_url'],
+                            'cloudinary_metadata' => json_encode($uploaded['cloudinary_metadata']),
+                            'storage_type' => 'cloudinary',
+                        ]);
 
                         $uploadedAttachments[] = [
                             'id' => $attachment->id,
                             'original_name' => $attachment->original_name,
                             'url' => $attachment->cloudinary_url,
                             'thumbnail' => $attachment->isImage() ? $attachment->getThumbnailUrl(100, 100) : null,
-                            'formatted_size' => $attachment->formatted_size,
+                            'formatted_size' => $this->fileUploadService->formatSize($attachment->file_size),
                         ];
 
-                    } catch (\Exception $e) {
+                    } catch (\Throwable $e) {
                         Log::error('Client attachment upload failed: ' . $e->getMessage());
-                        // Continue with other files
                     }
                 }
             }
 
             // Load relationships
             $rma->load(['product']);
+
+            // Send confirmation email to customer
+            \Illuminate\Support\Facades\Mail::to($user)->send(new \App\Mail\RmaSubmittedConfirmation($rma));
+
+            // Notify admins
+            $this->notificationService->newRmaSubmitted($rma);
 
             return response()->json([
                 'success' => true,

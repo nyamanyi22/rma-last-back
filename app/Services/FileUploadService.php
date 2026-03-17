@@ -2,10 +2,13 @@
 
 namespace App\Services;
 
+use App\Models\RmaAttachment;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Exception;
+use Throwable;
 use Carbon\Carbon;
 use CloudinaryLabs\CloudinaryLaravel\Facades\Cloudinary;
 
@@ -47,7 +50,7 @@ class FileUploadService
                 : "rma-attachments/user-{$userId}/temp";
 
             // Generate unique public ID
-            $timestamp = now()->format('Ymd_His');
+            $timestamp = Carbon::now()->format('Ymd_His');
             $random = Str::random(8);
             $extension = strtolower($file->getClientOriginalExtension());
             $publicId = "user_{$userId}_{$timestamp}_{$random}";
@@ -107,10 +110,26 @@ class FileUploadService
             // Upload to Cloudinary with compression
             $uploaded = Cloudinary::upload($file->getRealPath(), $uploadOptions);
 
-            // Get the uploaded file info
+            if (!$uploaded) {
+                throw new Exception("Cloudinary upload failed: No response from provider.");
+            }
+
+            // 1. Safely get the response data
             $uploadedData = $uploaded->getResponse();
 
-            // Calculate compression savings (if original size is available)
+            // 2. Crucial: Ensure $uploadedData is an array to avoid "offset on null"
+            if (!is_array($uploadedData)) {
+                // If getResponse() didn't return an array, manually build the basics 
+                // using the SDK methods which are more reliable.
+                $uploadedData = [
+                    'width' => method_exists($uploaded, 'getWidth') ? $uploaded->getWidth() : null,
+                    'height' => method_exists($uploaded, 'getHeight') ? $uploaded->getHeight() : null,
+                    'format' => $file->getClientOriginalExtension(),
+                    'bytes' => $file->getSize(),
+                ];
+            }
+
+            // 3. Use the null coalescing operator (??) for every single key
             $originalSize = $file->getSize();
             $cloudinarySize = $uploadedData['bytes'] ?? $originalSize;
             $savings = $originalSize - $cloudinarySize;
@@ -126,10 +145,10 @@ class FileUploadService
                 'cloudinary_metadata' => [
                     'width' => $uploadedData['width'] ?? null,
                     'height' => $uploadedData['height'] ?? null,
-                    'format' => $uploadedData['format'] ?? null,
+                    'format' => $uploadedData['format'] ?? ($uploadedData['extension'] ?? $file->getClientOriginalExtension()),
                     'version' => $uploadedData['version'] ?? null,
                     'resource_type' => $uploadedData['resource_type'] ?? $resourceType,
-                    'created_at' => $uploadedData['created_at'] ?? now()->toIso8601String(),
+                    'created_at' => $uploadedData['created_at'] ?? Carbon::now()->toIso8601String(),
                     'bytes' => $cloudinarySize,
                     'original_bytes' => $originalSize,
                     'compression_savings' => $savings,
@@ -138,8 +157,11 @@ class FileUploadService
                 ],
                 'storage_type' => 'cloudinary',
             ];
-
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
+            Log::error("FileUploadService Error: " . $e->getMessage(), [
+                'file' => $file->getClientOriginalName(),
+                'trace' => $e->getTraceAsString()
+            ]);
             throw new Exception("Cloudinary upload failed: " . $e->getMessage());
         }
     }
@@ -231,7 +253,14 @@ class FileUploadService
             // Upload to Cloudinary
             $uploaded = Cloudinary::upload("data:{$mimeType};base64,{$base64Data}", $uploadOptions);
 
+            if (!$uploaded) {
+                throw new Exception("Base64 upload failed: No response from provider.");
+            }
+
             $uploadedData = $uploaded->getResponse();
+            if (!is_array($uploadedData)) {
+                $uploadedData = [];
+            }
 
             return [
                 'uploaded_by' => $userId,
@@ -240,11 +269,12 @@ class FileUploadService
                 'file_size' => $uploadedData['bytes'] ?? 0,
                 'cloudinary_public_id' => $uploaded->getPublicId(),
                 'cloudinary_url' => $uploaded->getSecurePath(),
-                'cloudinary_metadata' => json_encode($uploadedData),
+                'cloudinary_metadata' => $uploadedData,
                 'storage_type' => 'cloudinary',
             ];
 
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
+            Log::error("Base64 Upload Error: " . $e->getMessage());
             throw new Exception("Base64 upload failed: " . $e->getMessage());
         }
     }
@@ -421,7 +451,7 @@ class FileUploadService
 
     private function generateFilename(UploadedFile $file, int $userId): string
     {
-        $timestamp = now()->format('Ymd_His');
+        $timestamp = Carbon::now()->format('Ymd_His');
         $random = Str::random(8);
         $extension = strtolower($file->getClientOriginalExtension());
 

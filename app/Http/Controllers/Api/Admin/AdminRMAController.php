@@ -9,16 +9,19 @@ use App\Models\RMAStatusHistory;
 use App\Enums\RMAStatus;
 use App\Models\RmaAttachment;
 use App\Services\FileUploadService;
+use App\Services\NotificationService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class AdminRMAController extends Controller
 {
     protected $fileUploadService;
+    protected $notificationService;
 
-    public function __construct(FileUploadService $fileUploadService)
+    public function __construct(FileUploadService $fileUploadService, NotificationService $notificationService)
     {
         $this->fileUploadService = $fileUploadService;
+        $this->notificationService = $notificationService;
     }
 
     public function index(Request $request)
@@ -125,6 +128,9 @@ class AdminRMAController extends Controller
 
             // Load relationships for response
             $rma->load(['customer', 'product']);
+
+            // Notify other admins/system (even if created by admin)
+            $this->notificationService->newRmaSubmitted($rma);
 
             return response()->json([
                 'success' => true,
@@ -236,6 +242,9 @@ class AdminRMAController extends Controller
                     'changed_by' => $request->user()->id,
                     'notes' => $request->notes ?? "Status changed from {$oldStatus->value} to {$newStatus->value}",
                 ]);
+
+                // Send email notification (queue automatically if implements ShouldQueue)
+                \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\RmaStatusUpdated($rma, $oldStatus->value, $newStatus->value));
             }
 
             if ($request->has('priority')) {
@@ -330,6 +339,8 @@ class AdminRMAController extends Controller
                         'changed_by' => $request->user()->id,
                         'notes' => 'Bulk status update',
                     ]);
+
+                    \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\RmaStatusUpdated($rma, $oldStatus->value, $newStatus->value));
                 }
             }
 
@@ -388,6 +399,10 @@ class AdminRMAController extends Controller
             'notify_customer' => $request->notify_customer ?? false,
         ]);
 
+        if ($comment->type === 'external') {
+            \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\NewRmaComment($rma, $comment));
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Comment added successfully',
@@ -420,6 +435,8 @@ class AdminRMAController extends Controller
                 'changed_by' => $request->user()->id,
                 'notes' => 'Shipping information updated, status moved to Shipped.',
             ]);
+
+            \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\RmaStatusUpdated($rma, $oldStatus->value, 'shipped'));
         }
 
         $rma->save();

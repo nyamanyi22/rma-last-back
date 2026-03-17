@@ -33,6 +33,7 @@
     29 => 'NunoMaduro\\Collision\\Adapters\\Laravel\\CollisionServiceProvider',
     30 => 'Termwind\\Laravel\\TermwindServiceProvider',
     31 => 'App\\Providers\\AppServiceProvider',
+    32 => 'CloudinaryLabs\\CloudinaryLaravel\\CloudinaryServiceProvider',
   ),
   'eager' => 
   array (
@@ -53,6 +54,7 @@
     14 => 'NunoMaduro\\Collision\\Adapters\\Laravel\\CollisionServiceProvider',
     15 => 'Termwind\\Laravel\\TermwindServiceProvider',
     16 => 'App\\Providers\\AppServiceProvider',
+    17 => 'CloudinaryLabs\\CloudinaryLaravel\\CloudinaryServiceProvider',
   ),
   'deferred' => 
   array (
