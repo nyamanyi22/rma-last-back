@@ -180,4 +180,139 @@ class ProductController extends Controller
             'data' => $brands
         ]);
     }
+
+    /**
+     * Export products to CSV
+     */
+    public function export(Request $request)
+    {
+        $query = Product::query();
+
+        // Filter by selected IDs if provided
+        if ($request->has('ids') && is_array($request->ids)) {
+            $query->whereIn('id', $request->ids);
+        } else {
+            // Apply search filters if no specific IDs are selected
+            if ($request->has('search')) {
+                $search = $request->search;
+                $query->where(function ($q) use ($search) {
+                    $q->where('name', 'like', "%{$search}%")
+                        ->orWhere('sku', 'like', "%{$search}%")
+                        ->orWhere('brand', 'like', "%{$search}%");
+                });
+            }
+
+            if ($request->has('category')) {
+                $query->where('category', $request->category);
+            }
+
+            if ($request->has('brand')) {
+                $query->where('brand', $request->brand);
+            }
+        }
+
+        $products = $query->get();
+
+        $filename = "products_export_" . date('Y-m-d_H-i-s') . ".csv";
+        $headers = [
+            "Content-type" => "text/csv",
+            "Content-Disposition" => "attachment; filename=$filename",
+            "Pragma" => "no-cache",
+            "Cache-Control" => "must-revalidate, post-check=0, pre-check=0",
+            "Expires" => "0"
+        ];
+
+        $callback = function () use ($products) {
+            $file = fopen('php://output', 'w');
+            fputcsv($file, [
+                'ID',
+                'SKU',
+                'Name',
+                'Category',
+                'Brand',
+                'Price',
+                'Stock',
+                'Warranty (Months)',
+                'Status',
+                'Created At'
+            ]);
+
+            foreach ($products as $product) {
+                fputcsv($file, [
+                    $product->id,
+                    $product->sku,
+                    $product->name,
+                    $product->category,
+                    $product->brand,
+                    $product->price,
+                    $product->stock_quantity,
+                    $product->default_warranty_months,
+                    $product->is_active ? 'Active' : 'Inactive',
+                    $product->created_at->format('Y-m-d')
+                ]);
+            }
+
+            fclose($file);
+        };
+
+        return response()->stream($callback, 200, $headers);
+    }
+
+    /**
+     * Bulk import products
+     */
+    public function import(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'products' => 'required|array',
+            'products.*.sku' => 'required|string|max:50',
+            'products.*.name' => 'required|string|max:255',
+            'products.*.category' => 'required|string|max:100',
+            'products.*.brand' => 'required|string|max:100',
+            'products.*.description' => 'nullable|string',
+            'products.*.price' => 'nullable|numeric|min:0',
+            'products.*.stock_quantity' => 'nullable|integer|min:0',
+            'products.*.default_warranty_months' => 'nullable|integer|min:0',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $imported = [];
+        $updated = [];
+        $failed = [];
+
+        foreach ($request->products as $index => $productData) {
+            try {
+                // Check if SKU exists to update or create
+                $product = Product::where('sku', $productData['sku'])->first();
+
+                if ($product) {
+                    $product->update($productData);
+                    $updated[] = $product->id;
+                } else {
+                    $product = Product::create($productData);
+                    $imported[] = $product->id;
+                }
+            } catch (\Exception $e) {
+                $failed[] = [
+                    'row' => $index + 1,
+                    'sku' => $productData['sku'] ?? 'Unknown',
+                    'error' => $e->getMessage()
+                ];
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "Imported " . count($imported) . " products, updated " . count($updated) . " products, " . count($failed) . " failed",
+            'imported' => $imported,
+            'updated' => $updated,
+            'failed' => $failed
+        ]);
+    }
 }

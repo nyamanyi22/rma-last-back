@@ -24,34 +24,50 @@ class AdminRMAController extends Controller
         $this->notificationService = $notificationService;
     }
 
+
+
+
     public function index(Request $request)
     {
         $rmas = RMARequest::with(['customer', 'product', 'assignedTo', 'attachments'])
-            ->when($request->status, fn($q) => $q->where('status', $request->status))
+            ->when($request->status, function ($query) use ($request) {
+            if ($request->status === 'under_review') {
+                return $query->whereIn('status', [
+                \App\Enums\RMAStatus::UNDER_REVIEW,
+                \App\Enums\RMAStatus::IN_REPAIR,
+                \App\Enums\RMAStatus::SHIPPED
+                ]);
+            }
+            return $query->where('status', $request->status);
+        })
             ->when($request->customer_id, fn($q) => $q->where('customer_id', $request->customer_id))
             ->when($request->assigned_to, fn($q) => $q->where('assigned_to', $request->assigned_to))
             ->when($request->rma_type, fn($q) => $q->where('rma_type', $request->rma_type))
             ->when($request->search, function ($q) use ($request) {
-                $search = $request->search;
-                $q->where(function ($query) use ($search) {
+            $search = $request->search;
+            $q->where(function ($query) use ($search) {
                     $query->where('rma_number', 'like', "%{$search}%")
                         ->orWhereHas('customer', fn($cq) => $cq->where('first_name', 'like', "%{$search}%")->orWhere('last_name', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%"))
                         ->orWhereHas('product', fn($pq) => $pq->where('name', 'like', "%{$search}%"));
-                });
+                }
+                );
             })
             ->latest()
             ->paginate($request->per_page ?? 15);
         // Add transformed URLs for each attachment
         $rmas->through(function ($rma) {
             $rma->attachments->each(function ($attachment) {
-                if ($attachment->isImage()) {
-                    $attachment->thumbnail = $attachment->getThumbnailUrl(200, 200);
-                    $attachment->preview = $attachment->getThumbnailUrl(800, 600);
-                    $attachment->optimized = $attachment->getOptimizedUrl();
+                    // Add unified URLs
+                    $attachment->url = $attachment->getUrl();
+                    if ($attachment->isImage()) {
+                        $attachment->thumbnail = $attachment->getThumbnailUrl(200, 200);
+                        $attachment->preview = $attachment->getThumbnailUrl(800, 600);
+                        $attachment->optimized = $attachment->getOptimizedUrl();
+                    }
                 }
+                );
+                return $rma;
             });
-            return $rma;
-        });
 
         return response()->json([
             'success' => true,
@@ -110,18 +126,19 @@ class AdminRMAController extends Controller
                         $uploadedAttachments[] = [
                             'id' => $attachment->id,
                             'original_name' => $attachment->original_name,
-                            'url' => $attachment->cloudinary_url,
+                            'url' => $attachment->getUrl(),
                             'thumbnail' => $attachment->isImage() ? $attachment->getThumbnailUrl(200, 200) : null,
                             'preview' => $attachment->isImage() ? $attachment->getThumbnailUrl(800, 600) : null,
-                            'optimized' => $attachment->isImage() ? $attachment->getOptimizedUrl() : $attachment->cloudinary_url,
+                            'optimized' => $attachment->isImage() ? $attachment->getOptimizedUrl() : $attachment->getUrl(),
                             'file_size' => $attachment->file_size,
                             'formatted_size' => $attachment->formatted_size,
                             'compression_stats' => $compressionStats,
                         ];
 
-                    } catch (\Exception $e) {
+                    }
+                    catch (\Exception $e) {
                         Log::error('Attachment upload failed: ' . $e->getMessage());
-                        // Continue with other files even if one fails
+                    // Continue with other files even if one fails
                     }
                 }
             }
@@ -179,6 +196,7 @@ class AdminRMAController extends Controller
 
         // Add transformed URLs and compression stats for convenience
         $rma->attachments->each(function ($attachment) {
+            $attachment->url = $attachment->getUrl();
             if ($attachment->isImage()) {
                 $attachment->thumbnail = $attachment->getThumbnailUrl(200, 200);
                 $attachment->preview = $attachment->getThumbnailUrl(800, 600);
@@ -210,6 +228,7 @@ class AdminRMAController extends Controller
             'priority' => 'nullable|string',
             'admin_notes' => 'nullable|string',
             'rejection_reason' => 'nullable|string',
+            'customer_message' => 'nullable|string',
         ]);
 
         return DB::transaction(function () use ($request, $rma) {
@@ -217,11 +236,6 @@ class AdminRMAController extends Controller
 
             if ($request->has('status') && $request->status !== $rma->status->value) {
                 $newStatus = RMAStatus::from($request->status);
-
-                // Optional: Check status transition validity
-                // if (!$rma->status->canTransitionTo($newStatus)) {
-                //     return response()->json(['message' => 'Invalid status transition'], 422);
-                // }
 
                 $rma->status = $newStatus;
 
@@ -232,6 +246,7 @@ class AdminRMAController extends Controller
 
                 if ($newStatus === RMAStatus::REJECTED) {
                     $rma->rejection_reason = $request->rejection_reason ?? $rma->rejection_reason;
+                    $rma->customer_message = $request->customer_message ?? $rma->customer_message;
                 }
 
                 // Record status history
@@ -240,11 +255,16 @@ class AdminRMAController extends Controller
                     'old_status' => $oldStatus,
                     'new_status' => $newStatus,
                     'changed_by' => $request->user()->id,
-                    'notes' => $request->notes ?? "Status changed from {$oldStatus->value} to {$newStatus->value}",
+                    'notes' => $request->notes ?? "Status changed from {$oldStatus->label()} to {$newStatus->label()}",
                 ]);
 
-                // Send email notification (queue automatically if implements ShouldQueue)
-                \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\RmaStatusUpdated($rma, $oldStatus->value, $newStatus->value));
+                // Send email notification
+                try {
+                    \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\RmaStatusUpdated($rma, $oldStatus->value, $newStatus->value));
+                }
+                catch (\Exception $e) {
+                    Log::error("Failed to send RMA status update email: " . $e->getMessage());
+                }
             }
 
             if ($request->has('priority')) {
@@ -253,6 +273,14 @@ class AdminRMAController extends Controller
 
             if ($request->has('admin_notes')) {
                 $rma->admin_notes = $request->admin_notes;
+            }
+
+            // Allow updating these even without status change if needed, but primarily for rejection flow
+            if ($request->has('rejection_reason')) {
+                $rma->rejection_reason = $request->rejection_reason;
+            }
+            if ($request->has('customer_message')) {
+                $rma->customer_message = $request->customer_message;
             }
 
             $rma->save();
@@ -457,9 +485,10 @@ class AdminRMAController extends Controller
             ->findOrFail($id);
 
         // Generate different sized URLs for images
+        $attachment->url = $attachment->getUrl();
         if ($attachment->isImage()) {
             $attachment->urls = [
-                'original' => $attachment->cloudinary_url,
+                'original' => $attachment->getUrl(),
                 'thumbnail' => $attachment->getThumbnailUrl(100, 100),
                 'small' => $attachment->getThumbnailUrl(300, 300),
                 'medium' => $attachment->getThumbnailUrl(800, 600),
@@ -531,7 +560,8 @@ class AdminRMAController extends Controller
                         'formatted_size' => $attachment->formatted_size,
                     ];
 
-                } catch (\Exception $e) {
+                }
+                catch (\Exception $e) {
                     Log::error('Attachment upload failed: ' . $e->getMessage());
                     return response()->json([
                         'success' => false,
@@ -554,23 +584,38 @@ class AdminRMAController extends Controller
     /**
      * Download an attachment (redirects to Cloudinary URL).
      */
-    public function downloadAttachment($id)
+    public function downloadAttachment(Request $request, $id)
     {
+        $user = $request->user();
+
+        // Manual token authentication for window.open downloads
+        if (!$user && $request->has('token')) {
+            $token = \Laravel\Sanctum\PersonalAccessToken::findToken($request->token);
+            if ($token && $token->tokenable) {
+                $user = $token->tokenable;
+            }
+        }
+
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated'], 401);
+        }
+
         $attachment = RmaAttachment::findOrFail($id);
 
-        // For Cloudinary files, redirect to the URL with forced download flag
-        if ($attachment->storage_type === 'cloudinary') {
-            // Add flag to force download
-            $downloadUrl = $attachment->cloudinary_url . '?fl_attachment=true';
+        if ($attachment->storage_type === 'cloudinary' && $attachment->cloudinary_url) {
+            // Simply redirect to Cloudinary URL without forcing attachment download
+            $downloadUrl = $attachment->cloudinary_url;
             return redirect()->away($downloadUrl);
         }
 
-        // For legacy local files
-        if ($attachment->path && \Storage::disk('public')->exists($attachment->path)) {
-            return \Storage::disk('public')->download($attachment->path, $attachment->original_name);
+        if ($attachment->file_path && \Illuminate\Support\Facades\Storage::disk('public')->exists($attachment->file_path)) {
+            $fullPath = \Illuminate\Support\Facades\Storage::disk('public')->path($attachment->file_path);
+            return response()->file($fullPath, [
+                'Content-Disposition' => 'inline; filename="' . str_replace('"', '\"', $attachment->original_name) . '"'
+            ]);
         }
 
-        return response()->json(['message' => 'File not found'], 404);
+        return response()->json(['message' => 'File not found on storage'], 404);
     }
 
     /**

@@ -31,7 +31,32 @@ class RMARequest extends Model
     {
         static::creating(function ($rma) {
             if (!$rma->rma_number) {
-                $rma->rma_number = RMANumberGenerator::generate();
+                $rma->rma_number = \App\Services\RMANumberGenerator::generate();
+            }
+
+            // Automatically check warranty if not already set
+            if ($rma->rma_type === \App\Enums\RMAType::WARRANTY_REPAIR && is_null($rma->is_warranty_valid)) {
+                try {
+                    $warrantyService = app(\App\Services\WarrantyService::class);
+                    $sale = null;
+
+                    if ($rma->sale_id) {
+                        $sale = \App\Models\Sale::find($rma->sale_id);
+                    } elseif ($rma->serial_number_provided) {
+                        $sale = $warrantyService->findSale($rma->serial_number_provided, $rma->receipt_number);
+                    }
+
+                    if ($sale) {
+                        $validation = $warrantyService->validate($sale);
+                        $rma->is_warranty_valid = $validation['is_valid'];
+                        $rma->warranty_expiry_date = $validation['expiry_date'];
+                        if (!$rma->sale_id) {
+                            $rma->sale_id = $sale->id;
+                        }
+                    }
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::warning('Automatic warranty check failed: ' . $e->getMessage());
+                }
             }
         });
     }
@@ -52,6 +77,7 @@ class RMARequest extends Model
         'status',
         'priority',
         'rejection_reason',
+        'customer_message',
         'admin_notes',
         'assigned_to',
         'approved_by',

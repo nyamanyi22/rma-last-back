@@ -42,7 +42,7 @@ class WelcomeVerification extends Mailable implements ShouldQueue
     public function content(): Content
     {
         return new Content(
-            markdown: 'emails.auth.welcome_verification',
+            markdown: 'emails.welcome_verification',
         );
     }
 

@@ -20,6 +20,7 @@ class RmaAttachment extends Model
         'original_name',
         'mime_type',
         'file_size',
+        'file_path',
         'cloudinary_public_id',
         'cloudinary_url',
         'cloudinary_metadata',
@@ -31,13 +32,38 @@ class RmaAttachment extends Model
         'file_size' => 'integer',
     ];
 
+    protected $appends = [
+        'url',
+        'thumbnail',
+        'optimized',
+    ];
+
+    // ===================================
+    // ACCESSORS
+    // ===================================
+
+    public function getUrlAttribute()
+    {
+        return $this->getUrl();
+    }
+
+    public function getThumbnailAttribute()
+    {
+        return $this->getThumbnailUrl();
+    }
+
+    public function getOptimizedAttribute()
+    {
+        return $this->getOptimizedUrl();
+    }
+
     // =========================================================================
     // RELATIONSHIPS
     // =========================================================================
 
     public function rmaRequest(): BelongsTo
     {
-        return $this->belongsTo(RMARequest::class);
+        return $this->belongsTo(RMARequest::class, 'rma_request_id');
     }
 
     public function uploadedBy(): BelongsTo
@@ -50,18 +76,38 @@ class RmaAttachment extends Model
     // =========================================================================
 
     /**
-     * Get a thumbnail URL. 
-     * Note: Changed from Accessor to Method to allow dynamic width/height.
+     * Get the public URL for the attachment.
+     */
+    public function getUrl(): string
+    {
+        if ($this->storage_type === 'cloudinary' && $this->cloudinary_url) {
+            return $this->cloudinary_url;
+        }
+
+        if ($this->file_path) {
+            return \Illuminate\Support\Facades\Storage::disk('public')->url($this->file_path);
+        }
+
+        return asset('images/icons/file-icon.png');
+    }
+
+    /**
+     * Get a thumbnail URL.
      */
     public function getThumbnailUrl(int $width = 150, int $height = 150): string
     {
         if (!$this->isImage()) {
-            return asset('images/icons/file-icon.png'); // Fallback for non-images
+            return asset('images/icons/file-icon.png');
         }
 
-        return Cloudinary::image($this->cloudinary_public_id)
-            ->resize('fill', $width, $height)
-            ->toUrl();
+        if ($this->storage_type === 'cloudinary' && $this->cloudinary_public_id) {
+            return Cloudinary::image($this->cloudinary_public_id)
+                ->resize('fill', $width, $height)
+                ->toUrl();
+        }
+
+        // For local storage, just return the full URL as a simple fallback
+        return $this->getUrl();
     }
 
     /**
@@ -69,10 +115,11 @@ class RmaAttachment extends Model
      */
     public function getOptimizedUrl(): string
     {
-        return Cloudinary::image($this->cloudinary_public_id)
-            ->autoFormat()
-            ->autoQuality()
-            ->toUrl();
+        if ($this->storage_type === 'cloudinary' && $this->cloudinary_public_id) {
+            return Cloudinary::getUrl($this->cloudinary_public_id);
+        }
+
+        return $this->getUrl();
     }
 
     /**
@@ -80,7 +127,7 @@ class RmaAttachment extends Model
      */
     public function isImage(): bool
     {
-        return str_starts_with($this->mime_type, 'image/');
+        return str_starts_with($this->mime_type ?? '', 'image/');
     }
 
     // =========================================================================
@@ -113,15 +160,22 @@ class RmaAttachment extends Model
     protected static function booted()
     {
         /**
-         * Automatically clean up Cloudinary storage when database record is deleted.
+         * Automatically clean up storage when database record is deleted.
          */
         static::deleting(function ($attachment) {
-            if ($attachment->cloudinary_public_id) {
+            if ($attachment->storage_type === 'cloudinary' && $attachment->cloudinary_public_id) {
                 try {
                     Cloudinary::destroy($attachment->cloudinary_public_id);
                     Log::info('Cloudinary file deleted: ' . $attachment->cloudinary_public_id);
                 } catch (\Exception $e) {
                     Log::error('Cloudinary deletion failed: ' . $e->getMessage());
+                }
+            } elseif ($attachment->storage_type === 'local' && $attachment->file_path) {
+                try {
+                    \Illuminate\Support\Facades\Storage::disk('public')->delete($attachment->file_path);
+                    Log::info('Local file deleted: ' . $attachment->file_path);
+                } catch (\Exception $e) {
+                    Log::error('Local file deletion failed: ' . $e->getMessage());
                 }
             }
         });

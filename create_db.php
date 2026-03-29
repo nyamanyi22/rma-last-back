@@ -1,20 +1,23 @@
 <?php
 $host = '127.0.0.1';
-$user = 'root';
-$pass = '';
+$user = 'postgres';
+$pass = 'liz';
+$dbname = 'rma-db';
 
-$conn = new mysqli($host, $user, $pass);
+$conn = pg_connect("host=$host user=$user password=$pass");
 
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
+if (!$conn) {
+    die("Connection failed: " . pg_last_error());
 }
 
-$sql = "CREATE DATABASE IF NOT EXISTS rma_system";
-if ($conn->query($sql) === TRUE) {
+$sql = "CREATE DATABASE \"$dbname\"";
+$result = pg_query($conn, $sql);
+
+if ($result) {
     echo "Database created successfully\n";
 } else {
-    echo "Error creating database: " . $conn->error . "\n";
+    echo "Error creating database: " . pg_last_error() . "\n";
 }
 
-$conn->close();
+pg_close($conn);
 ?>

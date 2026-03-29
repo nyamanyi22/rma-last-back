@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\Client\RMAController;
 use App\Http\Controllers\Api\Admin\AdminRMAController;
 use App\Http\Controllers\Api\Admin\ReportController;
 use App\Http\Controllers\Api\Admin\SuperAdminController;
+use App\Http\Controllers\Api\Admin\SettingsController;
 use Illuminate\Support\Facades\Route;
 
 
@@ -20,6 +21,10 @@ Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 Route::post('/verify-email', [AuthController::class, 'verify']);
 Route::post('/resend-verification', [AuthController::class, 'resendVerificationEmail']);
+
+// Token-based downloads (outside sanctum middleware as window.open doesn't send headers)
+Route::get('/customer/rma/attachments/{id}/download', [RMAController::class, 'downloadAttachment']);
+Route::get('/admin/rma/attachments/{id}/download', [AdminRMAController::class, 'downloadAttachment']);
 
 // Protected routes (require authentication)
 Route::middleware('auth:sanctum')->group(function () {
@@ -60,6 +65,9 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::get('/{id}', [RMAController::class, 'getAttachment']);      // View attachment details
             Route::get('/{id}/download', [RMAController::class, 'downloadAttachment']); // Download
         });
+
+        // Return Policy
+        Route::get('/return-policy', [SettingsController::class, 'getReturnPolicy']);
     });
 
     // Staff routes (role: csr, admin, super_admin)
@@ -68,57 +76,62 @@ Route::middleware('auth:sanctum')->group(function () {
             return response()->json(['message' => 'Admin dashboard']);
         });
 
-        // Product Management
-        Route::prefix('products')->group(function () {
-            // Lookup routes (MUST come before {product})
-            Route::get('/categories', [ProductController::class, 'getCategories']);
-            Route::get('/brands', [ProductController::class, 'getBrands']);
+        Route::middleware('role:admin,super_admin')->group(function () {
+            // Product Management
+            Route::prefix('products')->group(function () {
+                // Lookup routes (MUST come before {product})
+                Route::get('/categories', [ProductController::class, 'getCategories']);
+                Route::get('/brands', [ProductController::class, 'getBrands']);
 
-            // Bulk actions
-            Route::post('/bulk-delete', [ProductController::class, 'bulkDelete']);
-            Route::post('/bulk-status', [ProductController::class, 'bulkUpdateStatus']);
+                // Bulk actions
+                Route::post('/bulk-delete', [ProductController::class, 'bulkDelete']);
+                Route::post('/bulk-status', [ProductController::class, 'bulkUpdateStatus']);
+                Route::post('/import', [ProductController::class, 'import']);
+                Route::get('/export', [ProductController::class, 'export']);
 
-            // Standard CRUD
-            Route::get('/', [ProductController::class, 'index']);
-            Route::post('/', [ProductController::class, 'store']);
-            Route::get('/{product}', [ProductController::class, 'show']);
-            Route::put('/{product}', [ProductController::class, 'update']);
-            Route::delete('/{product}', [ProductController::class, 'destroy']);
-        });
+                // Standard CRUD
+                Route::get('/', [ProductController::class, 'index']);
+                Route::post('/', [ProductController::class, 'store']);
+                Route::get('/{product}', [ProductController::class, 'show']);
+                Route::put('/{product}', [ProductController::class, 'update']);
+                Route::delete('/{product}', [ProductController::class, 'destroy']);
+            });
 
-        // SALES MANAGEMENT ROUTES (Admin only)
-        Route::prefix('sales')->group(function () {
-            // List all sales (with filters)
-            Route::get('/', [SaleController::class, 'index']);
+            // SALES MANAGEMENT ROUTES (Admin only)
+            Route::prefix('sales')->group(function () {
+                // List all sales (with filters)
+                Route::get('/', [SaleController::class, 'index']);
 
-            // Create new sale
-            Route::post('/', [SaleController::class, 'store']);
+                // Create new sale
+                Route::post('/', [SaleController::class, 'store']);
 
-            // Bulk import sales
-            Route::post('/import', [SaleController::class, 'import']);
+                // Bulk import sales
+                Route::post('/import', [SaleController::class, 'import']);
 
-            // Export sales to CSV
-            Route::get('/export', [SaleController::class, 'export']);
+                // Export sales to CSV
+                Route::get('/export', [SaleController::class, 'export']);
 
-            // Link unlinked sales to user by email
-            Route::post('/link-to-user', [SaleController::class, 'linkToUser']);
+                // Link unlinked sales to user by email
+                Route::post('/link-to-user', [SaleController::class, 'linkToUser']);
 
-            // Single sale operations
-            Route::get('/{sale}', [SaleController::class, 'show']);
-            Route::put('/{sale}', [SaleController::class, 'update']);
-            Route::delete('/{sale}', [SaleController::class, 'destroy']);
-        });
+                // Single sale operations
+                Route::get('/{sale}', [SaleController::class, 'show']);
+                Route::put('/{sale}', [SaleController::class, 'update']);
+                Route::delete('/{sale}', [SaleController::class, 'destroy']);
+            });
 
-        // CUSTOMER MANAGEMENT ROUTES (Admin only)
-        Route::prefix('customers')->group(function () {
-            Route::get('/', [CustomerController::class, 'index']);
-            Route::post('/', [CustomerController::class, 'store']);
-            Route::get('/export', [CustomerController::class, 'export']);
-            Route::post('/bulk-delete', [CustomerController::class, 'bulkDelete']);
-            Route::post('/bulk-status', [CustomerController::class, 'bulkUpdateStatus']);
-            Route::get('/{id}', [CustomerController::class, 'show']);
-            Route::put('/{id}', [CustomerController::class, 'update']);
-            Route::delete('/{id}', [CustomerController::class, 'destroy']);
+            // CUSTOMER MANAGEMENT ROUTES (Admin only)
+            Route::prefix('customers')->group(function () {
+                Route::get('/', [CustomerController::class, 'index']);
+                Route::post('/', [CustomerController::class, 'store']);
+                Route::post('/import', [CustomerController::class, 'import']);
+                Route::get('/export', [CustomerController::class, 'export']);
+                Route::post('/bulk-delete', [CustomerController::class, 'bulkDelete']);
+                Route::post('/bulk-status', [CustomerController::class, 'bulkUpdateStatus']);
+                Route::get('/{id}', [CustomerController::class, 'show']);
+                Route::put('/{id}', [CustomerController::class, 'update']);
+                Route::delete('/{id}', [CustomerController::class, 'destroy']);
+            });
         });
 
         // ADMIN RMA ROUTES
@@ -131,6 +144,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
             // List all RMAs with filters
             Route::get('/', [AdminRMAController::class, 'index']);
+
+            // Create new RMA (Admin)
+            Route::post('/', [AdminRMAController::class, 'store']);
 
             // Bulk operations
             Route::post('/bulk-delete', [AdminRMAController::class, 'bulkDelete']);
@@ -163,10 +179,13 @@ Route::middleware('auth:sanctum')->group(function () {
         });
 
         // ADMIN REPORTS ROUTES
-        Route::prefix('reports')->group(function () {
-            Route::get('/overview', [ReportController::class, 'getDashboardOverview']);
-            Route::get('/export', [ReportController::class, 'exportRmasToCsv']);
+        Route::middleware('role:admin,super_admin')->group(function () {
+            Route::prefix('reports')->group(function () {
+                Route::get('/overview', [ReportController::class, 'getDashboardOverview']);
+                Route::get('/export', [ReportController::class, 'exportRmasToCsv']);
+            });
         });
+
     });
 
     // Super Admin only routes
@@ -181,5 +200,15 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::put('/{id}', [SuperAdminController::class, 'updateStaff']);
             Route::delete('/{id}', [SuperAdminController::class, 'deleteStaff']);
         });
+
+        // System Settings
+        Route::prefix('settings')->group(function () {
+            Route::get('/', [SettingsController::class, 'index']);
+            Route::post('/', [SettingsController::class, 'update']);
+            Route::get('/return-policy', [SettingsController::class, 'getReturnPolicy']);
+            Route::post('/return-policy', [SettingsController::class, 'updateReturnPolicy']);
+        });
+
+        Route::get('/system-info', [SettingsController::class, 'getSystemInfo']);
     });
 });

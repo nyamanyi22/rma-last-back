@@ -266,7 +266,8 @@ class CustomerController extends Controller
         // Filter by selected IDs if provided
         if ($request->has('ids') && is_array($request->ids)) {
             $query->whereIn('id', $request->ids);
-        } else {
+        }
+        else {
             // Apply search filters if no specific IDs are selected
             if ($request->has('search')) {
                 $search = $request->search;
@@ -333,5 +334,80 @@ class CustomerController extends Controller
         };
 
         return response()->stream($callback, 200, $headers);
+    }
+
+    /**
+     * Bulk import customers
+     */
+    public function import(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'customers' => 'required|array',
+            'customers.*.first_name' => 'required|string|max:255',
+            'customers.*.last_name' => 'required|string|max:255',
+            'customers.*.email' => 'required|email',
+            'customers.*.phone' => 'nullable|string|max:20',
+            'customers.*.country' => 'nullable|string|size:2',
+            'customers.*.city' => 'nullable|string|max:255',
+            'customers.*.address' => 'nullable|string|max:500',
+            'customers.*.postal_code' => 'nullable|string|max:20',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $imported = [];
+        $failed = [];
+        $duplicates = [];
+
+        foreach ($request->customers as $index => $customerData) {
+            try {
+                // Check if email already exists
+                if (User::where('email', $customerData['email'])->exists()) {
+                    $duplicates[] = [
+                        'row' => $index + 1,
+                        'email' => $customerData['email'],
+                        'error' => 'Email already exists'
+                    ];
+                    continue;
+                }
+
+                $password = 'Welcome' . rand(100, 999);
+
+                $user = User::create([
+                    'first_name' => $customerData['first_name'],
+                    'last_name' => $customerData['last_name'],
+                    'email' => $customerData['email'],
+                    'phone' => $customerData['phone'] ?? null,
+                    'country' => $customerData['country'] ?? null,
+                    'city' => $customerData['city'] ?? null,
+                    'address' => $customerData['address'] ?? null,
+                    'postal_code' => $customerData['postal_code'] ?? null,
+                    'password' => Hash::make($password),
+                    'role' => UserRole::CUSTOMER,
+                    'is_active' => true,
+                ]);
+
+                $imported[] = $user->id;
+            } catch (\Exception $e) {
+                $failed[] = [
+                    'row' => $index + 1,
+                    'email' => $customerData['email'] ?? 'Unknown',
+                    'error' => $e->getMessage()
+                ];
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => "Imported " . count($imported) . " customers, " . count($failed) . " failed, " . count($duplicates) . " duplicates",
+            'imported' => $imported,
+            'failed' => $failed,
+            'duplicates' => $duplicates
+        ]);
     }
 }

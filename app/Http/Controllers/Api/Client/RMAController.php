@@ -66,6 +66,12 @@ class RMAController extends Controller
                 }
             });
 
+            // Strip private admin fields
+            $rma->makeHidden(['admin_notes']);
+            if ($rma->status !== \App\Enums\RMAStatus::REJECTED) {
+                $rma->makeHidden(['rejection_reason', 'customer_message']);
+            }
+
             return $rma;
         });
 
@@ -101,122 +107,149 @@ class RMAController extends Controller
     /**
      * Store a newly created RMA request.
      */
-    public function store(Request $request)
-    {
-        $validated = $request->validate([
-            'product_id' => 'required|exists:products,id',
-            'sale_id' => 'nullable|exists:sales,id',
-            'rma_type' => 'required|string|in:simple_return,warranty_repair',
-            'reason' => 'required|string',
-            'issue_description' => 'required|string',
-            'serial_number_provided' => 'nullable|string',
-            'receipt_number' => 'nullable|string',
+   public function store(Request $request)
+{
+    $user = $request->user();
 
-            // Contact info (optional - will use user's info if not provided)
-            'contact_name' => 'nullable|string',
-            'contact_email' => 'nullable|email',
-            'contact_phone' => 'nullable|string',
-            'shipping_address' => 'nullable|string',
+    // Log request for debugging
+    Log::info('RMA store request received', [
+        'user_id' => $user->id,
+        'user_email' => $user->email,
+        'request_method' => $request->method(),
+        'content_type' => $request->header('Content-Type'),
+        'has_files' => $request->hasFile('attachments'),
+        'file_count' => $request->hasFile('attachments') ? count($request->file('attachments')) : 0,
+        'all_request_data' => $request->all(),
+    ]);
 
-            // Attachments
-            'attachments.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:5120',
+    // Validate request
+    $validated = $request->validate([
+        'product_id' => 'required|exists:products,id',
+        'sale_id' => 'nullable|exists:sales,id',
+        'rma_type' => 'required|string|in:simple_return,warranty_repair',
+        'reason' => 'required|string',
+        'issue_description' => 'required|string',
+        'serial_number_provided' => 'nullable|string',
+        'receipt_number' => 'nullable|string',
+
+        // Optional contact/shipping info
+        'contact_name' => 'nullable|string',
+        'contact_email' => 'nullable|email',
+        'contact_phone' => 'nullable|string',
+        'shipping_address' => 'nullable|string',
+
+        // Attachments
+        'attachments.*' => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:5120',
+    ]);
+
+    return DB::transaction(function () use ($request, $validated, $user) {
+
+        // Fill default contact info if not provided
+        $validated['contact_name'] = $validated['contact_name'] ?? $user->name;
+        $validated['contact_email'] = $validated['contact_email'] ?? $user->email;
+        $validated['contact_phone'] = $validated['contact_phone'] ?? $user->phone;
+        $validated['shipping_address'] = $validated['shipping_address'] ?? $user->address;
+
+        // Set customer_id
+        $validated['customer_id'] = $user->id;
+
+        // Set default RMA status and priority
+        $validated['status'] = \App\Enums\RMAStatus::PENDING;
+        $validated['priority'] = 'medium';
+
+        // Determine warranty check requirement
+        $rmaType = \App\Enums\RMAType::from($validated['rma_type']);
+        $validated['requires_warranty_check'] = $rmaType->requiresWarrantyCheck();
+
+        // Only keep fields that exist in rma_requests table
+        $rmaData = collect($validated)->except([
+            'contact_name',
+            'contact_email',
+            'contact_phone',
+            'shipping_address',
+            'attachments'
+        ])->toArray();
+
+        // Create RMA request
+        $rma = \App\Models\RMARequest::create($rmaData);
+
+        Log::info('RMA created successfully', [
+            'rma_id' => $rma->id,
+            'customer_id' => $user->id,
+            'rma_number' => $rma->rma_number,
+            'status' => $rma->status,
         ]);
 
-        return DB::transaction(function () use ($request, $validated) {
-            $user = $request->user();
+        $uploadedAttachments = [];
+        $uploadErrors = [];
 
-            // Set default contact info from user if not provided
-            $validated['contact_name'] = $validated['contact_name'] ?? $user->name;
-            $validated['contact_email'] = $validated['contact_email'] ?? $user->email;
-            $validated['contact_phone'] = $validated['contact_phone'] ?? $user->phone;
-            $validated['shipping_address'] = $validated['shipping_address'] ?? $user->address;
+        // Handle attachments if any
+        if ($request->hasFile('attachments')) {
+            $files = is_array($request->file('attachments')) ? $request->file('attachments') : [$request->file('attachments')];
 
-            // Add customer_id
-            $validated['customer_id'] = $user->id;
+            foreach ($files as $index => $file) {
+                try {
+                    $uploaded = $this->fileUploadService->uploadToCloudinary($file, $user->id, $rma->id);
 
-            // Set default status
-            $validated['status'] = RMAStatus::PENDING;
-            $validated['priority'] = 'medium';
+                    // Save attachment in database
+                    $attachment = $rma->attachments()->create([
+                        'uploaded_by' => $user->id,
+                        'original_name' => $file->getClientOriginalName(),
+                        'mime_type' => $file->getMimeType(),
+                        'file_size' => $file->getSize(),
+                        'file_path' => $uploaded['file_path'] ?? null,
+                        'cloudinary_public_id' => $uploaded['cloudinary_public_id'] ?? null,
+                        'cloudinary_url' => $uploaded['cloudinary_url'] ?? null,
+                        'cloudinary_metadata' => null,
+                        'storage_type' => $uploaded['storage_type'] ?? 'local',
+                    ]);
 
-            // Auto-determine warranty check requirement
-            $rmaType = \App\Enums\RMAType::from($validated['rma_type']);
-            $validated['requires_warranty_check'] = $rmaType->requiresWarrantyCheck();
+                    $uploadedAttachments[] = [
+                        'id' => $attachment->id,
+                        'original_name' => $attachment->original_name,
+                        'url' => $attachment->getUrl(),
+                        'thumbnail' => $attachment->getThumbnailUrl(100, 100),
+                        'formatted_size' => $this->fileUploadService->formatSize($attachment->file_size),
+                    ];
 
-            // Filter out fields not in database
-            $rmaData = collect($validated)->except([
-                'contact_name',
-                'contact_email',
-                'contact_phone',
-                'shipping_address',
-                'attachments'
-            ])->toArray();
-
-            // Create RMA
-            $rma = RMARequest::create($rmaData);
-
-            $uploadedAttachments = [];
-
-            // Handle file uploads
-            // Inside RMAController @store
-            if ($request->hasFile('attachments')) {
-                $files = $request->file('attachments');
-                // Ensure we're dealing with an array (handles single vs multiple)
-                $files = is_array($files) ? $files : [$files];
-
-                foreach ($files as $file) {
-                    try {
-                        $uploaded = $this->fileUploadService->uploadToCloudinary(
-                            $file,
-                            $user->id,
-                            $rma->id
-                        );
-
-                        // Manually map to ensure JSON encoding for metadata if needed
-                        $attachment = $rma->attachments()->create([
-                            'uploaded_by' => $uploaded['uploaded_by'],
-                            'original_name' => $uploaded['original_name'],
-                            'mime_type' => $uploaded['mime_type'],
-                            'file_size' => $uploaded['file_size'],
-                            'cloudinary_public_id' => $uploaded['cloudinary_public_id'],
-                            'cloudinary_url' => $uploaded['cloudinary_url'],
-                            'cloudinary_metadata' => json_encode($uploaded['cloudinary_metadata']),
-                            'storage_type' => 'cloudinary',
-                        ]);
-
-                        $uploadedAttachments[] = [
-                            'id' => $attachment->id,
-                            'original_name' => $attachment->original_name,
-                            'url' => $attachment->cloudinary_url,
-                            'thumbnail' => $attachment->isImage() ? $attachment->getThumbnailUrl(100, 100) : null,
-                            'formatted_size' => $this->fileUploadService->formatSize($attachment->file_size),
-                        ];
-
-                    } catch (\Throwable $e) {
-                        Log::error('Client attachment upload failed: ' . $e->getMessage());
-                    }
+                } catch (\Throwable $e) {
+                    $errorMessage = $e->getMessage();
+                    Log::error('Attachment upload failed', [
+                        'user_id' => $user->id,
+                        'rma_id' => $rma->id,
+                        'file_index' => $index,
+                        'file_name' => $file->getClientOriginalName(),
+                        'error' => $errorMessage,
+                    ]);
+                    $uploadErrors[] = "File '{$file->getClientOriginalName()}' failed to upload: {$errorMessage}";
                 }
             }
+        }
 
-            // Load relationships
-            $rma->load(['product']);
+        // If we had upload errors, we should fail the transaction to ensure data integrity
+        if (!empty($uploadErrors)) {
+            throw new \Exception(implode("\n", $uploadErrors));
+        }
 
-            // Send confirmation email to customer
-            \Illuminate\Support\Facades\Mail::to($user)->send(new \App\Mail\RmaSubmittedConfirmation($rma));
+        // Load product relationship for response
+        $rma->load('product');
 
-            // Notify admins
-            $this->notificationService->newRmaSubmitted($rma);
+        // Send confirmation email
+        \Illuminate\Support\Facades\Mail::to($user)->send(new \App\Mail\RmaSubmittedConfirmation($rma));
 
-            return response()->json([
-                'success' => true,
-                'message' => 'RMA request submitted successfully',
-                'data' => [
-                    'rma' => $rma,
-                    'attachments' => $uploadedAttachments
-                ]
-            ], 201);
-        });
-    }
+        // Notify admins
+        $this->notificationService->newRmaSubmitted($rma);
 
+        return response()->json([
+            'success' => true,
+            'message' => 'RMA request submitted successfully',
+            'data' => [
+                'rma' => $rma,
+                'attachments' => $uploadedAttachments
+            ]
+        ], 201);
+    });
+}
     /**
      * Display the specified RMA.
      */
@@ -243,19 +276,18 @@ class RMAController extends Controller
         $rma->status_display = $rma->status->label();
         $rma->priority_display = $rma->priority->label();
 
-        // Process attachments
-        $rma->attachments->each(function ($attachment) {
-            if ($attachment->isImage()) {
-                $attachment->thumbnail = $attachment->getThumbnailUrl(150, 150);
-                $attachment->preview = $attachment->getThumbnailUrl(800, 600);
-                $attachment->optimized = $attachment->getOptimizedUrl();
-            }
-        });
-
         // Process comments - only show external comments to customer
         $rma->comments = $rma->comments->filter(function ($comment) {
             return $comment->type === 'external';
         })->values();
+
+        // Strip private admin fields - never expose admin_notes to the customer
+        $rma->makeHidden(['admin_notes']);
+
+        // Only expose rejection details if actually rejected
+        if ($rma->status !== \App\Enums\RMAStatus::REJECTED) {
+            $rma->makeHidden(['rejection_reason', 'customer_message']);
+        }
 
         return response()->json([
             'success' => true,
@@ -362,7 +394,7 @@ class RMAController extends Controller
         // Generate URLs for different sizes
         if ($attachment->isImage()) {
             $attachment->urls = [
-                'original' => $attachment->cloudinary_url,
+                'original' => $attachment->getUrl(),
                 'thumbnail' => $attachment->getThumbnailUrl(100, 100),
                 'preview' => $attachment->getThumbnailUrl(800, 600),
                 'optimized' => $attachment->getOptimizedUrl(),
@@ -375,20 +407,40 @@ class RMAController extends Controller
         ]);
     }
 
-    /**
-     * Download an attachment.
-     */
     public function downloadAttachment(Request $request, $id)
     {
         $user = $request->user();
+
+        // Manual token authentication for window.open downloads
+        if (!$user && $request->has('token')) {
+            $token = \Laravel\Sanctum\PersonalAccessToken::findToken($request->token);
+            if ($token && $token->tokenable) {
+                $user = $token->tokenable;
+            }
+        }
+
+        if (!$user) {
+            return response()->json(['message' => 'Unauthenticated'], 401);
+        }
 
         $attachment = RmaAttachment::whereHas('rmaRequest', function ($q) use ($user) {
             $q->where('customer_id', $user->id);
         })->findOrFail($id);
 
-        // Redirect to Cloudinary with download flag
-        $downloadUrl = $attachment->cloudinary_url . '?fl_attachment=true';
-        return redirect()->away($downloadUrl);
+        if ($attachment->storage_type === 'cloudinary' && $attachment->cloudinary_url) {
+            // Simply redirect to Cloudinary URL without forcing attachment download
+            $downloadUrl = $attachment->cloudinary_url;
+            return redirect()->away($downloadUrl);
+        }
+
+        if ($attachment->file_path && \Illuminate\Support\Facades\Storage::disk('public')->exists($attachment->file_path)) {
+            $fullPath = \Illuminate\Support\Facades\Storage::disk('public')->path($attachment->file_path);
+            return response()->file($fullPath, [
+                'Content-Disposition' => 'inline; filename="' . str_replace('"', '\"', $attachment->original_name) . '"'
+            ]);
+        }
+
+        return response()->json(['message' => 'File not found on storage'], 404);
     }
 
     /**

@@ -53,14 +53,18 @@ enum RMAStatus: string
     public function canTransitionTo(self $newStatus): bool
     {
         $transitions = [
-            self::PENDING => [self::UNDER_REVIEW, self::CANCELLED],
+            self::PENDING      => [self::UNDER_REVIEW, self::APPROVED, self::REJECTED, self::CANCELLED],
             self::UNDER_REVIEW => [self::APPROVED, self::REJECTED],
-            self::APPROVED => [self::IN_REPAIR, self::READY_FOR_SHIPMENT],
-            self::IN_REPAIR => [self::REPAIRED],
-            self::REPAIRED => [self::READY_FOR_SHIPMENT],
+            // Fast Track: approved → shipped directly (simple returns/exchanges)
+            // Technical Track: approved → in_repair (warranty/repairs)
+            self::APPROVED     => [self::IN_REPAIR, self::SHIPPED, self::READY_FOR_SHIPMENT],
+            // Technical Track: in_repair → shipped directly (skip repaired/ready_for_shipment intermediaries)
+            self::IN_REPAIR    => [self::REPAIRED, self::SHIPPED],
+            self::REPAIRED     => [self::READY_FOR_SHIPMENT, self::SHIPPED],
             self::READY_FOR_SHIPMENT => [self::SHIPPED],
-            self::SHIPPED => [self::DELIVERED],
-            self::DELIVERED => [self::COMPLETED],
+            // Both tracks end at completed (allow from shipped or delivered)
+            self::SHIPPED      => [self::DELIVERED, self::COMPLETED],
+            self::DELIVERED    => [self::COMPLETED],
         ];
 
         return in_array($newStatus, $transitions[$this] ?? []);
