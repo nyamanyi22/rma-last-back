@@ -14,7 +14,7 @@ class NotificationController extends Controller
     public function index(Request $request)
     {
         $notifications = $request->user()->unreadNotifications()
-            ->paginate($request->get('limit', 20));
+            ->paginate($request->input('limit', 20));
 
         return response()->json([
             'success' => true,
@@ -28,7 +28,7 @@ class NotificationController extends Controller
     public function all(Request $request)
     {
         $notifications = $request->user()->notifications()
-            ->paginate($request->get('limit', 50));
+            ->paginate($request->input('limit', 50));
 
         return response()->json([
             'success' => true,

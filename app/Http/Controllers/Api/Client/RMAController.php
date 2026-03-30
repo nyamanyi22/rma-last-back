@@ -7,6 +7,7 @@ use App\Models\RMARequest;
 use App\Models\RMAComment;
 use App\Models\RmaAttachment;
 use App\Enums\RMAStatus;
+use App\Enums\RMAPriority;
 use App\Services\FileUploadService;
 use App\Services\NotificationService;
 use Illuminate\Http\Request;
@@ -47,13 +48,13 @@ class RMAController extends Controller
         // Add formatted data for frontend
         $rmas->through(function ($rma) {
             // Check if status is backed by enum and has label
-            if ($rma->status instanceof \App\Enums\RMAStatus) {
+            if ($rma->status instanceof RMAStatus) {
                 $rma->status_display = $rma->status->label();
             } else {
                 $rma->status_display = ucfirst($rma->status);
             }
 
-            if ($rma->priority instanceof \App\Enums\RMAPriority) {
+            if ($rma->priority instanceof RMAPriority) {
                 $rma->priority_display = $rma->priority->label();
             } else {
                 $rma->priority_display = ucfirst($rma->priority);
@@ -68,7 +69,7 @@ class RMAController extends Controller
 
             // Strip private admin fields
             $rma->makeHidden(['admin_notes']);
-            if ($rma->status !== \App\Enums\RMAStatus::REJECTED) {
+            if ($rma->status !== RMAStatus::REJECTED) {
                 $rma->makeHidden(['rejection_reason', 'customer_message']);
             }
 
@@ -154,7 +155,7 @@ class RMAController extends Controller
         $validated['customer_id'] = $user->id;
 
         // Set default RMA status and priority
-        $validated['status'] = \App\Enums\RMAStatus::PENDING;
+        $validated['status'] = RMAStatus::PENDING;
         $validated['priority'] = 'medium';
 
         // Determine warranty check requirement
@@ -171,7 +172,7 @@ class RMAController extends Controller
         ])->toArray();
 
         // Create RMA request
-        $rma = \App\Models\RMARequest::create($rmaData);
+        $rma = RMARequest::create($rmaData);
 
         Log::info('RMA created successfully', [
             'rma_id' => $rma->id,
@@ -266,7 +267,7 @@ class RMAController extends Controller
                 $q->with('user')->latest();
             },
             'statusHistory' => function ($q) {
-                $q->with('changedBy')->latest();
+                $q->with('changer')->latest();
             }
         ])
             ->where('customer_id', $user->id)
@@ -285,7 +286,7 @@ class RMAController extends Controller
         $rma->makeHidden(['admin_notes']);
 
         // Only expose rejection details if actually rejected
-        if ($rma->status !== \App\Enums\RMAStatus::REJECTED) {
+        if ($rma->status !== RMAStatus::REJECTED) {
             $rma->makeHidden(['rejection_reason', 'customer_message']);
         }
 
