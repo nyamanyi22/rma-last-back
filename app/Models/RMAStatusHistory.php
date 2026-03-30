@@ -32,7 +32,7 @@ class RMAStatusHistory extends Model
         return $this->belongsTo(RMARequest::class , 'rma_id');
     }
 
-    public function changedBy(): BelongsTo
+    public function changer(): BelongsTo
     {
         return $this->belongsTo(User::class , 'changed_by');
     }

@@ -160,6 +160,70 @@ class AdminRMAController extends Controller
         });
     }
 
+    /**
+     * Admin creates an RMA on behalf of a specific customer.
+     * POST /admin/rma/create
+     * Accepts the same fields as the customer submit form, plus customer_id.
+     */
+    public function adminCreate(Request $request)
+    {
+        $validated = $request->validate([
+            'customer_id'        => 'required|exists:users,id',
+            'product_id'         => 'required|exists:products,id',
+            'rma_type'           => 'required|string',
+            'reason'             => 'required|string',
+            'issue_description'  => 'required|string',
+            'sale_id'            => 'nullable|exists:sales,id',
+            'serial_number_provided' => 'nullable|string',
+            'receipt_number'     => 'nullable|string',
+            'contact_name'       => 'nullable|string',
+            'contact_email'      => 'nullable|email',
+            'contact_phone'      => 'nullable|string',
+            'shipping_address'   => 'nullable|string',
+            'attachments.*'      => 'nullable|file|mimes:jpg,jpeg,png,pdf|max:5120',
+        ]);
+
+        return DB::transaction(function () use ($request, $validated) {
+            $rma = RMARequest::create($validated);
+
+            $uploadedAttachments = [];
+
+            if ($request->hasFile('attachments')) {
+                foreach ($request->file('attachments') as $file) {
+                    try {
+                        $uploaded = $this->fileUploadService->uploadToCloudinary(
+                            $file,
+                            $request->user()->id,
+                            $rma->id
+                        );
+                        $attachment = $rma->attachments()->create($uploaded);
+                        $uploadedAttachments[] = [
+                            'id'             => $attachment->id,
+                            'original_name'  => $attachment->original_name,
+                            'url'            => $attachment->getUrl(),
+                        ];
+                    } catch (\Exception $e) {
+                        Log::error('adminCreate attachment upload failed: ' . $e->getMessage());
+                    }
+                }
+            }
+
+            $rma->load(['customer', 'product']);
+            $this->notificationService->newRmaSubmitted($rma);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'RMA created successfully for customer',
+                'data'    => [
+                    'rma'         => $rma,
+                    'rmaNumber'   => $rma->rma_number,
+                    'attachments' => $uploadedAttachments,
+                ]
+            ], 201);
+        });
+    }
+
+
 
     public function stats()
     {
@@ -189,7 +253,7 @@ class AdminRMAController extends Controller
             'assignedTo',
             'approvedBy',
             'comments.user',
-            'statusHistory.changedBy',
+            'statusHistory.changer',
             'attachments.uploadedBy'
         ])
             ->findOrFail($id);
@@ -265,6 +329,9 @@ class AdminRMAController extends Controller
                 catch (\Exception $e) {
                     Log::error("Failed to send RMA status update email: " . $e->getMessage());
                 }
+
+                // Notify other staff - ✅ ADDED
+                $this->notificationService->statusChanged($rma, $oldStatus->value, $request->user());
             }
 
             if ($request->has('priority')) {
@@ -369,6 +436,9 @@ class AdminRMAController extends Controller
                     ]);
 
                     \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\RmaStatusUpdated($rma, $oldStatus->value, $newStatus->value));
+
+                    // Notify other staff - ✅ ADDED
+                    $this->notificationService->statusChanged($rma, $oldStatus->value, $request->user());
                 }
             }
 
@@ -429,6 +499,9 @@ class AdminRMAController extends Controller
 
         if ($comment->type === 'external') {
             \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\NewRmaComment($rma, $comment));
+        } else {
+            // Notify other staff about internal note - ✅ ADDED
+            $this->notificationService->internalNoteAdded($rma, $comment->comment, $request->user());
         }
 
         return response()->json([
@@ -465,6 +538,9 @@ class AdminRMAController extends Controller
             ]);
 
             \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\RmaStatusUpdated($rma, $oldStatus->value, 'shipped'));
+            
+            // Notify other staff - ✅ ADDED
+            $this->notificationService->statusChanged($rma, $oldStatus->value, $request->user());
         }
 
         $rma->save();

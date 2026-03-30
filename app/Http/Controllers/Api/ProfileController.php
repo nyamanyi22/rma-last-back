@@ -76,6 +76,9 @@ class ProfileController extends Controller
                 'address' => $user->address,
                 'city' => $user->city,
                 'postal_code' => $user->postal_code,
+                'role' => $user->role,
+                'role_label' => $user->role_label,
+                'short_role_label' => $user->short_role_label,
             ]
         ]);
     }

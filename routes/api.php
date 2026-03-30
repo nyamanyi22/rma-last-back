@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\Client\RMAController;
 use App\Http\Controllers\Api\Admin\AdminRMAController;
 use App\Http\Controllers\Api\Admin\ReportController;
 use App\Http\Controllers\Api\Admin\SuperAdminController;
+use App\Http\Controllers\Api\Admin\NotificationController;
 use App\Http\Controllers\Api\Admin\SettingsController;
 use Illuminate\Support\Facades\Route;
 
@@ -147,6 +148,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
             // Create new RMA (Admin)
             Route::post('/', [AdminRMAController::class, 'store']);
+            Route::post('/create', [AdminRMAController::class, 'adminCreate']);
 
             // Bulk operations
             Route::post('/bulk-delete', [AdminRMAController::class, 'bulkDelete']);
@@ -176,6 +178,17 @@ Route::middleware('auth:sanctum')->group(function () {
 
             // Shipping
             Route::put('/{id}/shipping', [AdminRMAController::class, 'updateShipping']);
+        });
+
+        // NOTIFICATIONS
+        Route::prefix('notifications')->group(function () {
+            Route::get('/', [NotificationController::class, 'index']);
+            Route::get('/all', [NotificationController::class, 'all']);
+            Route::get('/unread-count', [NotificationController::class, 'unreadCount']);
+            Route::post('/{id}/read', [NotificationController::class, 'markAsRead']);
+            Route::post('/mark-all-read', [NotificationController::class, 'markAllAsRead']);
+            Route::delete('/{id}', [NotificationController::class, 'destroy']);
+            Route::delete('/clear-all', [NotificationController::class, 'clearAll']);
         });
 
         // ADMIN REPORTS ROUTES

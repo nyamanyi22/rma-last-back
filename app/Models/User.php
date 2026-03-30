@@ -56,6 +56,7 @@ class User extends Authenticatable
         'full_name',
         'initials',
         'role_label',      // 👈 Add this for UI
+        'short_role_label',// 👈 Add this for UI
         'is_staff',         // 👈 Add this for frontend
         'is_admin',         // 👈 Add this for frontend
     ];
@@ -111,6 +112,14 @@ class User extends Authenticatable
     protected function getRoleLabelAttribute(): string
     {
         return $this->role?->label() ?? 'Unknown';
+    }
+
+    /**
+     * Get short role label for UI (e.g. CSR, Admin)
+     */
+    protected function getShortRoleLabelAttribute(): string
+    {
+        return $this->role?->shortLabel() ?? 'User';
     }
 
     /**

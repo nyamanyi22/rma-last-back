@@ -19,6 +19,16 @@ enum UserRole: string
         };
     }
 
+    public function shortLabel(): string
+    {
+        return match($this) {
+            self::CUSTOMER => 'Customer',
+            self::CSR => 'CSR',
+            self::ADMIN => 'Admin',
+            self::SUPER_ADMIN => 'Super Admin',
+        };
+    }
+
 
     public function isStaff(): bool
     {
