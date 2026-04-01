@@ -153,6 +153,7 @@ class SuperAdminController extends Controller
             'role'       => $validated['role'],
             'password'   => Hash::make($validated['password']),
             'is_active'  => true,
+            'email_verified_at' => now(), // Auto-verify admin-created staff
             'created_by' => $request->user()->id,
         ]);
 

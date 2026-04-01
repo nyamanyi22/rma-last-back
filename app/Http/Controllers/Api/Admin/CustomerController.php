@@ -89,6 +89,7 @@ class CustomerController extends Controller
         $data['password'] = Hash::make($data['password']);
         $data['role'] = UserRole::CUSTOMER;
         $data['is_active'] = $data['is_active'] ?? true;
+        $data['email_verified_at'] = now(); // Auto-verify admin-created user
 
         $customer = User::create($data);
 
@@ -390,6 +391,7 @@ class CustomerController extends Controller
                     'password' => Hash::make($password),
                     'role' => UserRole::CUSTOMER,
                     'is_active' => true,
+                    'email_verified_at' => now(), // Auto-verify imported user
                 ]);
 
                 $imported[] = $user->id;

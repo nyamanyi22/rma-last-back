@@ -49,9 +49,16 @@ class AuthController extends Controller
         // Send Welcome/Verification Email
         $verificationToken = Str::random(64);
         $user->update(['verification_token' => $verificationToken]);
-        
+
+        // 🔧 FOR DEVELOPMENT: Auto-verify in local env so login works immediately, 
+        // but we STILL send the email so the user can test the email flow.
+        if (app()->environment('local')) {
+            $user->email_verified_at = now();
+            $user->save();
+        }
+
         $verificationUrl = config('app.frontend_url', 'http://localhost:3000') . '/verify-email?token=' . $verificationToken . '&email=' . urlencode($user->email);
-        
+
         Mail::to($user)->send(new WelcomeVerification($user, $verificationUrl));
 
         return response()->json([
@@ -74,6 +81,15 @@ class AuthController extends Controller
             throw ValidationException::withMessages([
                 'email' => ['The provided credentials are incorrect.'],
             ]);
+        }
+
+        // Check if email is verified
+        if (!$user->hasVerifiedEmail()) {
+            return response()->json([
+                'message' => 'Please verify your email before logging in.',
+                'email' => $user->email,
+                'unverified' => true
+            ], 403);
         }
 
         $token = $user->createToken('auth_token')->plainTextToken;
@@ -104,6 +120,15 @@ class AuthController extends Controller
             throw ValidationException::withMessages([
                 'email' => ['Customer accounts cannot log in through the staff portal.'],
             ]);
+        }
+
+        // Check if email is verified
+        if (!$user->hasVerifiedEmail()) {
+            return response()->json([
+                'message' => 'Please verify your email before logging in.',
+                'email' => $user->email,
+                'unverified' => true
+            ], 403);
         }
 
         $token = $user->createToken('auth_token')->plainTextToken;
@@ -170,7 +195,7 @@ class AuthController extends Controller
 
         // Check if token expired (e.g. 60 mins)
         if (now()->subMinutes(60)->gt($reset->created_at)) {
-             return response()->json(['message' => 'Token has expired.'], 422);
+            return response()->json(['message' => 'Token has expired.'], 422);
         }
 
         $user = User::where('email', $request->email)->first();
@@ -230,7 +255,7 @@ class AuthController extends Controller
         $user->update(['verification_token' => $verificationToken]);
 
         $verificationUrl = config('app.frontend_url', 'http://localhost:3000') . '/verify-email?token=' . $verificationToken . '&email=' . urlencode($user->email);
-        
+
         Mail::to($user)->send(new WelcomeVerification($user, $verificationUrl));
 
         return response()->json(['message' => 'Verification email resent.']);
