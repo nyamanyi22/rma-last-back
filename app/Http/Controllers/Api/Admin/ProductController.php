@@ -150,6 +150,58 @@ class ProductController extends Controller
     }
 
     /**
+     * Bulk delete products
+     */
+    public function bulkDelete(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'ids' => 'required|array',
+            'ids.*' => 'exists:products,id'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $deleted = Product::whereIn('id', $request->ids)->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => "{$deleted} products deleted successfully"
+        ]);
+    }
+
+    /**
+     * Bulk update product status
+     */
+    public function bulkUpdateStatus(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'ids' => 'required|array',
+            'ids.*' => 'exists:products,id',
+            'is_active' => 'required|boolean'
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'success' => false,
+                'errors' => $validator->errors()
+            ], 422);
+        }
+
+        $updated = Product::whereIn('id', $request->ids)
+            ->update(['is_active' => $request->is_active]);
+
+        return response()->json([
+            'success' => true,
+            'message' => "{$updated} products updated successfully"
+        ]);
+    }
+
+    /**
      * Get all categories.
      */
     public function getCategories()

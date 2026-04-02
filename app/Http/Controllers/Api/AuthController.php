@@ -12,6 +12,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use App\Mail\WelcomeVerification;
 use App\Mail\PasswordResetMail;
+use App\Mail\TwoFactorCodeMail;
+use App\Models\Setting;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -52,14 +54,15 @@ class AuthController extends Controller
 
         // 🔧 FOR DEVELOPMENT: Auto-verify in local env so login works immediately, 
         // but we STILL send the email so the user can test the email flow.
-        if (app()->environment('local')) {
+        /*if (app()->environment('local')) {
             $user->email_verified_at = now();
             $user->save();
-        }
+        }*/
 
         $verificationUrl = config('app.frontend_url', 'http://localhost:3000') . '/verify-email?token=' . $verificationToken . '&email=' . urlencode($user->email);
 
         Mail::to($user)->send(new WelcomeVerification($user, $verificationUrl));
+        \Log::info('Verification email attempted for: ' . $user->email);
 
         return response()->json([
             'access_token' => $token,
@@ -131,12 +134,93 @@ class AuthController extends Controller
             ], 403);
         }
 
+        // Check if 2FA is enforced globally
+        $is2FAEnforced = Setting::where('key', 'admin_2fa_enforced')->value('value') === '1';
+
+        if ($is2FAEnforced) {
+            $code = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+            $user->two_factor_code = Hash::make($code);
+            $user->two_factor_expires_at = now()->addMinutes(10);
+            $user->save();
+
+            Mail::to($user)->send(new TwoFactorCodeMail($user, $code));
+
+            return response()->json([
+                'requires_2fa' => true,
+                'email' => $user->email,
+                'message' => 'Please enter the 6-digit verification code sent to your email.'
+            ]);
+        }
+
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
             'access_token' => $token,
             'token_type' => 'Bearer',
             'user' => $user,
+        ]);
+    }
+
+    public function verify2FA(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|email|string',
+            'code' => 'required|string|size:6',
+        ]);
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json(['message' => 'User not found.'], 404);
+        }
+
+        if (!$user->two_factor_code || empty($user->two_factor_code)) {
+            return response()->json(['message' => '2FA is not active for this user.'], 400);
+        }
+
+        if (now()->greaterThan($user->two_factor_expires_at)) {
+            return response()->json(['message' => 'Verification code has expired. Please request a new one.'], 400);
+        }
+
+        if (!Hash::check($request->code, $user->two_factor_code)) {
+            return response()->json(['message' => 'Invalid verification code.'], 400);
+        }
+
+        // Successfully verified
+        $user->two_factor_code = null;
+        $user->two_factor_expires_at = null;
+        $user->save();
+
+        $token = $user->createToken('auth_token')->plainTextToken;
+
+        return response()->json([
+            'access_token' => $token,
+            'token_type' => 'Bearer',
+            'user' => $user,
+        ]);
+    }
+
+    public function resend2FA(Request $request)
+    {
+        $request->validate(['email' => 'required|email|string']);
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json(['message' => 'User not found.'], 404);
+        }
+
+        // Generate new code and reset expiration
+        $code = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+        $user->two_factor_code = Hash::make($code);
+        $user->two_factor_expires_at = now()->addMinutes(10);
+        $user->save();
+
+        Mail::to($user)->send(new TwoFactorCodeMail($user, $code));
+
+        return response()->json([
+            'success' => true,
+            'message' => 'A new verification code has been sent to your email.'
         ]);
     }
 

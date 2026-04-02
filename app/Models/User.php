@@ -39,6 +39,8 @@ class User extends Authenticatable implements MustVerifyEmail
         'email_verified_at',
         'verification_token',
         'last_login_at',
+        'two_factor_code',
+        'two_factor_expires_at',
     ];
 
     /**
@@ -75,6 +77,7 @@ class User extends Authenticatable implements MustVerifyEmail
             'password' => 'hashed',
             'is_active' => 'boolean',
             'last_login_at' => 'datetime',
+            'two_factor_expires_at' => 'datetime',
             'role' => UserRole::class, // 👈 CRITICAL: Cast to enum!
         ];
     }
@@ -234,6 +237,11 @@ class User extends Authenticatable implements MustVerifyEmail
     public function sales(): HasMany
     {
         return $this->hasMany(Sale::class, 'customer_id');
+    }
+
+    public function statusHistories(): HasMany
+    {
+        return $this->hasMany(\App\Models\RMAStatusHistory::class, 'changed_by');
     }
 
     // =========================================================================

@@ -206,6 +206,7 @@ class CustomerController extends Controller
 
         $cannotDelete = [];
         foreach ($customers as $customer) {
+            /** @var \App\Models\User $customer */
             if ($customer->sales()->exists() || $customer->rmaRequests()->exists()) {
                 $cannotDelete[] = $customer->id;
             }

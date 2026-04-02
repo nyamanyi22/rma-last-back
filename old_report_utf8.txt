@@ -1,35 +1,17 @@
-<?php
+﻿<?php
 
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\Product;
-use App\Models\RMARequest;
-use App\Models\User;
-use App\Models\Sale;
-use App\Enums\RMAStatus;
 use Illuminate\Http\Request;
-use Barryvdh\DomPDF\Facade\Pdf;
-use Illuminate\Support\Facades\Response;
+use App\Models\RMARequest;
+use App\Models\Product;
+use App\Enums\RMAStatus;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
 class ReportController extends Controller
 {
-    public function __construct()
-    {
-        // Allow token-based authentication for window.open downloads
-        if (request()->has('token') && !auth()->check()) {
-            $token = \Laravel\Sanctum\PersonalAccessToken::findToken(request()->token);
-            if ($token && $token->tokenable) {
-                auth()->login($token->tokenable);
-            }
-        }
-    }
-
-    // ==========================================
-    // Original Dashboard Methods (Restored)
-    // ==========================================
     public function getDashboardOverview(Request $request)
     {
         return response()->json([
@@ -178,107 +160,5 @@ class ReportController extends Controller
         };
 
         return response()->stream($callback, 200, $headers);
-    }
-
-    // ==========================================
-    // New Super Admin Export Methods
-    // ==========================================
-
-    /**
-     * Export Inventory Report
-     */
-    public function exportInventory(Request $request)
-    {
-        $format = $request->query('format', 'pdf');
-        
-        // Simplified: List products with how many RMAs they have
-        $products = Product::withCount('rmaRequests as rma_requests_count')->get();
-
-        if ($format === 'csv') {
-            return $this->generateCsv('inventory_report', ['SKU', 'Name', 'Category', 'Price', 'Stock', 'RMAs Handled'], $products->map(fn($p) => [
-                $p->sku, $p->name, $p->category, $p->price, $p->stock_quantity, $p->rma_requests_count
-            ])->toArray());
-        }
-
-        $pdf = Pdf::loadView('reports.inventory', compact('products'));
-        return $pdf->download('inventory_report_' . now()->format('Y-m-d') . '.pdf');
-    }
-
-    /**
-     * Export Staff Performance Report
-     */
-    public function exportStaffPerformance(Request $request)
-    {
-        $format = $request->query('format', 'pdf');
-        
-        // Simplified: List staff with how many status changes they performed
-        $staff = User::whereIn('role', ['csr', 'admin', 'super_admin'])
-            ->withCount('statusHistories as status_changes_count')
-            ->get();
-
-        if ($format === 'csv') {
-            return $this->generateCsv('staff_performance', ['Name', 'Role', 'Email', 'Active Status Changes'], $staff->map(fn($s) => [
-                $s->full_name, $s->role_label, $s->email, $s->status_changes_count
-            ])->toArray());
-        }
-
-        $pdf = Pdf::loadView('reports.staff_performance', compact('staff'));
-        return $pdf->download('staff_performance_' . now()->format('Y-m-d') . '.pdf');
-    }
-
-    /**
-     * Export Financial Summary Report
-     */
-    public function exportFinancialSummary(Request $request)
-    {
-        $format = $request->query('format', 'pdf');
-        
-        // Simplified: Show total RMAs, total returns value, total refunds
-        $total_rmas = RMARequest::count();
-        
-        // Assuming RMAs are linked to sales, sum the amount for returns. 
-        // We will calculate total sales value linked to all RMAs
-        $total_returns_value = DB::table('rma_requests')
-            ->join('sales', 'rma_requests.sale_id', '=', 'sales.id')
-            ->sum('sales.amount');
-            
-        // Refunds (RMAs with Simple Return type that are completed/approved)
-        $total_refunds = DB::table('rma_requests')
-            ->join('sales', 'rma_requests.sale_id', '=', 'sales.id')
-            ->where('rma_requests.rma_type', 'simple_return')
-            ->whereIn('rma_requests.status', ['approved', 'completed'])
-            ->sum('sales.amount');
-
-        if ($format === 'csv') {
-            return $this->generateCsv('financial_summary', ['Total RMAs', 'Total Returns Value', 'Total Refunds'], [
-                [$total_rmas, $total_returns_value, $total_refunds]
-            ]);
-        }
-
-        $pdf = Pdf::loadView('reports.financial', compact('total_rmas', 'total_returns_value', 'total_refunds'));
-        return $pdf->download('financial_summary_' . now()->format('Y-m-d') . '.pdf');
-    }
-
-    /**
-     * Helper to generate CSV response
-     */
-    private function generateCsv($filename, $headers, $data)
-    {
-        $callback = function() use ($headers, $data) {
-            $file = fopen('php://output', 'w');
-            fputcsv($file, $headers);
-            foreach ($data as $row) {
-                fputcsv($file, $row);
-            }
-            fclose($file);
-        };
-
-        return Response::stream($callback, 200, [
-            "Content-type" => "text/csv",
-            "Content-Disposition" => "attachment; filename={$filename}_" . now()->format('Y-m-d') . ".csv",
-            "Pragma" => "no-cache",
-            "Cache-Control" => "must-revalidate, post-check=0, pre-check=0",
-            "Expires" => "0"
-        ]);
     }
 }

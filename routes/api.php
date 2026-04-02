@@ -18,6 +18,8 @@ use Illuminate\Support\Facades\Route;
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/staff/login', [AuthController::class, 'staffLogin']);
+Route::post('/staff/verify-2fa', [AuthController::class, 'verify2FA']);
+Route::post('/staff/resend-2fa', [AuthController::class, 'resend2FA']);
 Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
 Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 Route::post('/verify-email', [AuthController::class, 'verify']);
@@ -26,6 +28,12 @@ Route::post('/resend-verification', [AuthController::class, 'resendVerificationE
 // Token-based downloads (outside sanctum middleware as window.open doesn't send headers)
 Route::get('/customer/rma/attachments/{id}/download', [RMAController::class, 'downloadAttachment']);
 Route::get('/admin/rma/attachments/{id}/download', [AdminRMAController::class, 'downloadAttachment']);
+
+// Report Downloads (Token based)
+Route::get('/super-admin/reports/inventory', [ReportController::class, 'exportInventory']);
+Route::get('/super-admin/reports/staff-performance', [ReportController::class, 'exportStaffPerformance']);
+Route::get('/super-admin/reports/financial', [ReportController::class, 'exportFinancialSummary']);
+Route::get('/admin/reports/export', [ReportController::class, 'exportRmasToCsv']);
 
 // Protected routes (require authentication)
 Route::middleware('auth:sanctum')->group(function () {
@@ -195,7 +203,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::middleware('role:admin,super_admin')->group(function () {
             Route::prefix('reports')->group(function () {
                 Route::get('/overview', [ReportController::class, 'getDashboardOverview']);
-                Route::get('/export', [ReportController::class, 'exportRmasToCsv']);
             });
         });
 
@@ -222,6 +229,8 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/return-policy', [SettingsController::class, 'updateReturnPolicy']);
         });
 
+        // SYSTEM REPORTS (Export paths moved to token-based downloads at top of file)
+        
         Route::get('/system-info', [SettingsController::class, 'getSystemInfo']);
     });
 });
