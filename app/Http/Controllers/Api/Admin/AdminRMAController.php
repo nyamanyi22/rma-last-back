@@ -10,18 +10,64 @@ use App\Enums\RMAStatus;
 use App\Models\RmaAttachment;
 use App\Services\FileUploadService;
 use App\Services\NotificationService;
+use App\Services\EmailService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Throwable;
 
 class AdminRMAController extends Controller
 {
-    protected $fileUploadService;
-    protected $notificationService;
-
-    public function __construct(FileUploadService $fileUploadService, NotificationService $notificationService)
+    public function __construct(
+        protected FileUploadService $fileUploadService,
+        protected NotificationService $notificationService,
+        protected EmailService $mailService
+    )
     {
-        $this->fileUploadService = $fileUploadService;
-        $this->notificationService = $notificationService;
+    }
+
+    private function sendStatusUpdateEmail(RMARequest $rma, string $oldStatus, string $newStatus): bool
+    {
+        $rma->loadMissing('customer');
+
+        if (!$rma->customer || !$rma->customer->email) {
+            Log::warning('Skipped RMA status update email because customer email is missing.', [
+                'rma_id' => $rma->id,
+                'rma_number' => $rma->rma_number,
+                'old_status' => $oldStatus,
+                'new_status' => $newStatus,
+            ]);
+
+            return false;
+        }
+
+        try {
+            return $this->mailService->send(
+                $rma->customer->email,
+                new \App\Mail\RmaStatusUpdated($rma, $oldStatus, $newStatus),
+                EmailService::CUSTOMER_RMA_STATUS_UPDATE,
+                'rma_status_update_customer',
+                [
+                    'rma_id' => $rma->id,
+                    'rma_number' => $rma->rma_number,
+                    'customer_email' => $rma->customer->email,
+                    'old_status' => $oldStatus,
+                    'new_status' => $newStatus,
+                ]
+            );
+        }
+        catch (Throwable $e) {
+            Log::error('Failed to send RMA status update email.', [
+                'rma_id' => $rma->id,
+                'rma_number' => $rma->rma_number,
+                'customer_email' => $rma->customer->email,
+                'old_status' => $oldStatus,
+                'new_status' => $newStatus,
+                'mailer' => config('mail.default'),
+                'error' => $e->getMessage(),
+            ]);
+
+            return false;
+        }
     }
 
 
@@ -322,13 +368,6 @@ class AdminRMAController extends Controller
                     'notes' => $request->notes ?? "Status changed from {$oldStatus->label()} to {$newStatus->label()}",
                 ]);
 
-                // Send email notification
-                try {
-                    \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\RmaStatusUpdated($rma, $oldStatus->value, $newStatus->value));
-                }
-                catch (\Exception $e) {
-                    Log::error("Failed to send RMA status update email: " . $e->getMessage());
-                }
 
                 // Notify other staff - ✅ ADDED
                 $this->notificationService->statusChanged($rma, $oldStatus->value, $request->user());
@@ -351,6 +390,10 @@ class AdminRMAController extends Controller
             }
 
             $rma->save();
+
+            if ($request->has('status') && $request->status !== $oldStatus->value) {
+                $this->sendStatusUpdateEmail($rma, $oldStatus->value, $rma->status->value);
+            }
 
             return response()->json([
                 'success' => true,
@@ -435,7 +478,7 @@ class AdminRMAController extends Controller
                         'notes' => 'Bulk status update',
                     ]);
 
-                    \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\RmaStatusUpdated($rma, $oldStatus->value, $newStatus->value));
+                    $this->sendStatusUpdateEmail($rma, $oldStatus->value, $newStatus->value);
 
                     // Notify other staff - ✅ ADDED
                     $this->notificationService->statusChanged($rma, $oldStatus->value, $request->user());
@@ -458,6 +501,10 @@ class AdminRMAController extends Controller
         $rma = RMARequest::findOrFail($id);
         $rma->assigned_to = $request->assigned_to;
         $rma->save();
+
+        if ($rma->status === RMAStatus::SHIPPED) {
+            $this->sendStatusUpdateEmail($rma, $oldStatus->value, RMAStatus::SHIPPED->value);
+        }
 
         return response()->json([
             'success' => true,
@@ -498,7 +545,17 @@ class AdminRMAController extends Controller
         ]);
 
         if ($comment->type === 'external') {
-            \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\NewRmaComment($rma, $comment));
+            $this->mailService->send(
+                $rma->customer,
+                new \App\Mail\NewRmaComment($rma, $comment),
+                EmailService::CUSTOMER_RMA_COMMENT,
+                'rma_customer_comment',
+                [
+                    'rma_id' => $rma->id,
+                    'rma_number' => $rma->rma_number,
+                    'customer_id' => $rma->customer_id,
+                ]
+            );
         } else {
             // Notify other staff about internal note - ✅ ADDED
             $this->notificationService->internalNoteAdded($rma, $comment->comment, $request->user());
@@ -537,13 +594,16 @@ class AdminRMAController extends Controller
                 'notes' => 'Shipping information updated, status moved to Shipped.',
             ]);
 
-            \Illuminate\Support\Facades\Mail::to($rma->customer)->send(new \App\Mail\RmaStatusUpdated($rma, $oldStatus->value, 'shipped'));
             
             // Notify other staff - ✅ ADDED
             $this->notificationService->statusChanged($rma, $oldStatus->value, $request->user());
         }
 
         $rma->save();
+
+        if (isset($oldStatus) && $rma->status === RMAStatus::SHIPPED) {
+            $this->sendStatusUpdateEmail($rma, $oldStatus->value, RMAStatus::SHIPPED->value);
+        }
 
         return response()->json([
             'success' => true,

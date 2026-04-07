@@ -10,19 +10,19 @@ use App\Enums\RMAStatus;
 use App\Enums\RMAPriority;
 use App\Services\FileUploadService;
 use App\Services\NotificationService;
+use App\Services\EmailService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class RMAController extends Controller
 {
-    protected $fileUploadService;
-    protected $notificationService;
-
-    public function __construct(FileUploadService $fileUploadService, NotificationService $notificationService)
+    public function __construct(
+        protected FileUploadService $fileUploadService,
+        protected NotificationService $notificationService,
+        protected EmailService $mailService
+    )
     {
-        $this->fileUploadService = $fileUploadService;
-        $this->notificationService = $notificationService;
     }
 
     /**
@@ -236,7 +236,17 @@ class RMAController extends Controller
         $rma->load('product');
 
         // Send confirmation email
-        \Illuminate\Support\Facades\Mail::to($user)->send(new \App\Mail\RmaSubmittedConfirmation($rma));
+        $this->mailService->send(
+            $user,
+            new \App\Mail\RmaSubmittedConfirmation($rma),
+            EmailService::CUSTOMER_RMA_SUBMITTED,
+            'rma_submitted_confirmation',
+            [
+                'rma_id' => $rma->id,
+                'rma_number' => $rma->rma_number,
+                'customer_email' => $user->email,
+            ]
+        );
 
         // Notify admins
         $this->notificationService->newRmaSubmitted($rma);

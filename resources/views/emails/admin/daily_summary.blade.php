@@ -16,5 +16,5 @@ View All RMAs
 </x-mail::button>
 
 Thanks,<br>
-{{ config('app.name') }} Automated System
+{{ \App\Models\Setting::portalName() }} Automated System
 </x-mail::message>

@@ -1,5 +1,5 @@
 <x-mail::message>
-# Welcome to {{ config('app.name') }}!
+# Welcome to {{ \App\Models\Setting::portalName() }}!
 
 Hi {{ $user->first_name }},
 
@@ -14,5 +14,5 @@ Verify Email Address
 If you did not create an account, no further action is required.
 
 Thanks,<br>
-{{ config('app.name') }} Team
+{{ \App\Models\Setting::portalName() }} Team
 </x-mail::message>

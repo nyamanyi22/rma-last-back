@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\Route;
 
 
 // Public routes (no authentication required)
+Route::get('/portal-settings', [SettingsController::class, 'portalSettings']);
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 Route::post('/staff/login', [AuthController::class, 'staffLogin']);
@@ -36,11 +37,12 @@ Route::get('/super-admin/reports/financial', [ReportController::class, 'exportFi
 Route::get('/admin/reports/export', [ReportController::class, 'exportRmasToCsv']);
 
 // Protected routes (require authentication)
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'maintenance_mode', 'password_expiry'])->group(function () {
 
     // Auth routes
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
+    Route::post('/session/refresh', [AuthController::class, 'refreshSession']);
 
     // PRODUCT ROUTES - Accessible to all authenticated users
     Route::get('/products', [ProductController::class, 'index']);
@@ -49,6 +51,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Profile routes (Global)
     Route::get('/profile', [ProfileController::class, 'show']);
     Route::put('/profile', [ProfileController::class, 'update']);
+    Route::put('/profile/password', [ProfileController::class, 'updatePassword']);
+    Route::get('/settings', [SettingsController::class, 'index']);
+    Route::put('/settings', [SettingsController::class, 'update'])->middleware('is_super_admin');
 
 
     // Customer routes (role: customer)
@@ -225,6 +230,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::prefix('settings')->group(function () {
             Route::get('/', [SettingsController::class, 'index']);
             Route::post('/', [SettingsController::class, 'update']);
+            Route::put('/', [SettingsController::class, 'update']);
             Route::get('/return-policy', [SettingsController::class, 'getReturnPolicy']);
             Route::post('/return-policy', [SettingsController::class, 'updateReturnPolicy']);
         });

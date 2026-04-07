@@ -13,5 +13,5 @@ View RMA Details
 </x-mail::button>
 
 Thanks,<br>
-{{ config('app.name') }}
+{{ \App\Models\Setting::portalName() }}
 </x-mail::message>

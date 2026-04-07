@@ -6,8 +6,8 @@ use App\Models\RMARequest;
 use App\Models\User;
 use App\Mail\RmaDailyPendingSummary;
 use App\Enums\RMAStatus;
+use App\Services\EmailService;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Mail;
 
 class SendDailyPendingSummary extends Command
 {
@@ -24,6 +24,11 @@ class SendDailyPendingSummary extends Command
      * @var string
      */
     protected $description = 'Send a summary of RMAs that have been pending for more than 2 days to all admins.';
+
+    public function __construct(private readonly EmailService $mailService)
+    {
+        parent::__construct();
+    }
 
     /**
      * Execute the console command.
@@ -52,7 +57,17 @@ class SendDailyPendingSummary extends Command
         }
 
         foreach ($admins as $admin) {
-            Mail::to($admin->email)->queue(new RmaDailyPendingSummary($pendingRmas));
+            $this->mailService->queue(
+                $admin->email,
+                new RmaDailyPendingSummary($pendingRmas),
+                EmailService::STAFF_DAILY_PENDING_SUMMARY,
+                'staff_daily_pending_summary',
+                [
+                    'staff_email' => $admin->email,
+                    'pending_count' => $pendingRmas->count(),
+                ],
+                true
+            );
         }
 
         $this->info('Daily summary email queued for ' . $admins->count() . ' admin(s).');

@@ -1,5 +1,5 @@
 <x-mail::message>
-# Welcome to {{ config('app.name') }}!
+# Welcome to {{ \App\Models\Setting::portalName() }}!
 
 Hi {{ $user->first_name }},
 
@@ -11,8 +11,12 @@ To get started, please verify your email address by clicking the button below:
 Verify Email Address
 </x-mail::button>
 
+If the button does not work, copy and paste this link into your browser:
+
+{{ $verificationUrl }}
+
 If you did not create an account, no further action is required.
 
 Thanks,<br>
-{{ config('app.name') }} Team
+{{ \App\Models\Setting::portalName() }} Team
 </x-mail::message>

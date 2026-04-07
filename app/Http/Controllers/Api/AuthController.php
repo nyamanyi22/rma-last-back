@@ -14,17 +14,84 @@ use App\Mail\WelcomeVerification;
 use App\Mail\PasswordResetMail;
 use App\Mail\TwoFactorCodeMail;
 use App\Models\Setting;
+use App\Services\EmailService;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
+    public function __construct(private readonly EmailService $mailService)
+    {
+    }
+
+    private function frontendUrl(): string
+    {
+        return rtrim((string) config('app.frontend_url', env('APP_FRONTEND_URL', 'http://localhost:5173')), '/');
+    }
+
+    private function buildVerificationUrl(User $user, string $verificationToken): string
+    {
+        return $this->frontendUrl() . '/verify-email?token=' . $verificationToken . '&email=' . urlencode($user->email);
+    }
+
+    private function buildResetUrl(User $user, string $token): string
+    {
+        return $this->frontendUrl() . '/reset-password?token=' . $token . '&email=' . urlencode($user->email);
+    }
+
+    private function issueAuthToken(User $user, string $tokenName = 'auth_token'): array
+    {
+        $expiresAt = now()->addHours(Setting::sessionDurationHours());
+        $token = $user->createToken($tokenName, ['*'], $expiresAt)->plainTextToken;
+
+        return [
+            'token' => $token,
+            'expires_at' => $expiresAt->toIso8601String(),
+            'duration_hours' => Setting::sessionDurationHours(),
+            'timeout_alerts_enabled' => Setting::sessionTimeoutAlertsEnabled(),
+        ];
+    }
+
+    private function authPayload(User $user, string $tokenName = 'auth_token'): array
+    {
+        $session = $this->issueAuthToken($user, $tokenName);
+
+        return [
+            'access_token' => $session['token'],
+            'token_type' => 'Bearer',
+            'user' => $user,
+            'session_expires_at' => $session['expires_at'],
+            'session_duration_hours' => $session['duration_hours'],
+            'session_timeout_alerts' => $session['timeout_alerts_enabled'],
+        ];
+    }
+
+    private function sendMailMessage(User $user, \Illuminate\Contracts\Mail\Mailable $mailable, string $context): bool
+    {
+        $emailType = match ($context) {
+            'register_verification', 'resend_verification' => EmailService::EMAIL_VERIFICATION,
+            'staff_login_2fa', 'resend_2fa' => EmailService::TWO_FACTOR,
+            'forgot_password' => EmailService::PASSWORD_RESET,
+            default => EmailService::CUSTOMER_RMA_SUBMITTED,
+        };
+
+        return $this->mailService->send($user, $mailable, $emailType, $context, [
+            'email' => $user->email,
+        ]);
+    }
+
     public function register(Request $request)
     {
+        if (!Setting::boolean('allow_registrations', true)) {
+            return response()->json([
+                'message' => 'New registrations are currently disabled.',
+            ], 403);
+        }
+
         $request->validate([
             'first_name' => 'required|string|max:255',
             'last_name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users',
-            'password' => 'required|string|min:8|confirmed',
+            'password' => 'required|string|min:' . Setting::minPasswordLength() . '|confirmed',
             'phone' => 'nullable|string|max:20',
             'country' => 'nullable|string|max:2',
             'address' => 'nullable|string|max:500',
@@ -37,6 +104,7 @@ class AuthController extends Controller
             'last_name' => $request->last_name,
             'email' => $request->email,
             'password' => Hash::make($request->password),
+            'password_changed_at' => now(),
             'role' => UserRole::CUSTOMER,
             'is_active' => true,
             'phone' => $request->phone,
@@ -45,8 +113,6 @@ class AuthController extends Controller
             'city' => $request->city,
             'postal_code' => $request->postal_code,
         ]);
-
-        $token = $user->createToken('auth_token')->plainTextToken;
 
         // Send Welcome/Verification Email
         $verificationToken = Str::random(64);
@@ -59,15 +125,15 @@ class AuthController extends Controller
             $user->save();
         }*/
 
-        $verificationUrl = config('app.frontend_url', 'http://localhost:3000') . '/verify-email?token=' . $verificationToken . '&email=' . urlencode($user->email);
-
-        Mail::to($user)->send(new WelcomeVerification($user, $verificationUrl));
-        \Log::info('Verification email attempted for: ' . $user->email);
+        $verificationUrl = $this->buildVerificationUrl($user, $verificationToken);
+        $mailSent = $this->sendMailMessage($user, new WelcomeVerification($user, $verificationUrl), 'register_verification');
 
         return response()->json([
-            'access_token' => $token,
-            'token_type' => 'Bearer',
-            'user' => $user,
+            ...$this->authPayload($user, 'auth_token'),
+            'verification_email_sent' => $mailSent,
+            'message' => $mailSent
+                ? 'Registration successful. Verification email sent.'
+                : 'Registration successful, but the verification email could not be sent. Please try resend verification.',
         ]);
     }
 
@@ -95,13 +161,7 @@ class AuthController extends Controller
             ], 403);
         }
 
-        $token = $user->createToken('auth_token')->plainTextToken;
-
-        return response()->json([
-            'access_token' => $token,
-            'token_type' => 'Bearer',
-            'user' => $user,
-        ]);
+        return response()->json($this->authPayload($user, 'auth_token'));
     }
 
     public function staffLogin(Request $request)
@@ -135,7 +195,7 @@ class AuthController extends Controller
         }
 
         // Check if 2FA is enforced globally
-        $is2FAEnforced = Setting::where('key', 'admin_2fa_enforced')->value('value') === '1';
+        $is2FAEnforced = Setting::boolean('two_factor_required', false);
 
         if ($is2FAEnforced) {
             $code = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
@@ -143,7 +203,13 @@ class AuthController extends Controller
             $user->two_factor_expires_at = now()->addMinutes(10);
             $user->save();
 
-            Mail::to($user)->send(new TwoFactorCodeMail($user, $code));
+            $mailSent = $this->sendMailMessage($user, new TwoFactorCodeMail($user, $code), 'staff_login_2fa');
+
+            if (!$mailSent) {
+                return response()->json([
+                    'message' => 'We could not send the 2FA verification code email. Please try again.',
+                ], 500);
+            }
 
             return response()->json([
                 'requires_2fa' => true,
@@ -152,13 +218,7 @@ class AuthController extends Controller
             ]);
         }
 
-        $token = $user->createToken('auth_token')->plainTextToken;
-
-        return response()->json([
-            'access_token' => $token,
-            'token_type' => 'Bearer',
-            'user' => $user,
-        ]);
+        return response()->json($this->authPayload($user, 'auth_token'));
     }
 
     public function verify2FA(Request $request)
@@ -191,13 +251,7 @@ class AuthController extends Controller
         $user->two_factor_expires_at = null;
         $user->save();
 
-        $token = $user->createToken('auth_token')->plainTextToken;
-
-        return response()->json([
-            'access_token' => $token,
-            'token_type' => 'Bearer',
-            'user' => $user,
-        ]);
+        return response()->json($this->authPayload($user, 'auth_token'));
     }
 
     public function resend2FA(Request $request)
@@ -216,7 +270,14 @@ class AuthController extends Controller
         $user->two_factor_expires_at = now()->addMinutes(10);
         $user->save();
 
-        Mail::to($user)->send(new TwoFactorCodeMail($user, $code));
+        $mailSent = $this->sendMailMessage($user, new TwoFactorCodeMail($user, $code), 'resend_2fa');
+
+        if (!$mailSent) {
+            return response()->json([
+                'success' => false,
+                'message' => 'We could not send a new verification code email. Please try again.',
+            ], 500);
+        }
 
         return response()->json([
             'success' => true,
@@ -235,7 +296,32 @@ class AuthController extends Controller
 
     public function me(Request $request)
     {
-        return response()->json($request->user());
+        return response()->json([
+            'user' => $request->user(),
+            'session_timeout_alerts' => Setting::sessionTimeoutAlertsEnabled(),
+            'session_duration_hours' => Setting::sessionDurationHours(),
+            'session_expires_at' => optional($request->user()->currentAccessToken()?->expires_at)?->toIso8601String(),
+        ]);
+    }
+
+    public function refreshSession(Request $request)
+    {
+        $user = $request->user();
+        $currentToken = $user?->currentAccessToken();
+
+        if (!$user || !$currentToken) {
+            return response()->json([
+                'message' => 'Unauthenticated.',
+            ], 401);
+        }
+
+        $currentToken->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Session refreshed successfully.',
+            ...$this->authPayload($user, 'auth_token'),
+        ]);
     }
 
     public function forgotPassword(Request $request)
@@ -256,11 +342,15 @@ class AuthController extends Controller
             ['token' => Hash::make($token), 'created_at' => now()]
         );
 
-        $resetUrl = config('app.frontend_url', 'http://localhost:3000') . '/reset-password?token=' . $token . '&email=' . urlencode($user->email);
+        $resetUrl = $this->buildResetUrl($user, $token);
+        $mailSent = $this->sendMailMessage($user, new PasswordResetMail($user, $resetUrl), 'forgot_password');
 
-        Mail::to($user)->send(new PasswordResetMail($user, $resetUrl));
-
-        return response()->json(['message' => 'Password reset link sent to your email.']);
+        return response()->json([
+            'message' => $mailSent
+                ? 'Password reset link sent to your email.'
+                : 'We could not send the password reset email. Please try again.',
+            'email_sent' => $mailSent,
+        ], $mailSent ? 200 : 500);
     }
 
     public function resetPassword(Request $request)
@@ -268,7 +358,7 @@ class AuthController extends Controller
         $request->validate([
             'email' => 'required|email',
             'token' => 'required|string',
-            'password' => 'required|string|min:8|confirmed',
+            'password' => 'required|string|min:' . Setting::minPasswordLength() . '|confirmed',
         ]);
 
         $reset = DB::table('password_reset_tokens')->where('email', $request->email)->first();
@@ -285,6 +375,7 @@ class AuthController extends Controller
         $user = User::where('email', $request->email)->first();
         if ($user) {
             $user->password = Hash::make($request->password);
+            $user->password_changed_at = now();
             $user->save();
 
             DB::table('password_reset_tokens')->where('email', $request->email)->delete();
@@ -302,23 +393,31 @@ class AuthController extends Controller
             'token' => 'required|string',
         ]);
 
-        $user = User::where('email', $request->email)
-            ->where('verification_token', $request->token)
-            ->first();
+        $user = User::where('email', $request->email)->first();
 
         if (!$user) {
             return response()->json(['message' => 'Invalid verification link or email.'], 422);
         }
 
         if ($user->hasVerifiedEmail()) {
-            return response()->json(['message' => 'Email already verified.']);
+            return response()->json([
+                'message' => 'Email already verified.',
+                'already_verified' => true,
+            ]);
+        }
+
+        if ($user->verification_token !== $request->token) {
+            return response()->json(['message' => 'Invalid verification link or email.'], 422);
         }
 
         $user->email_verified_at = now();
         $user->verification_token = null;
         $user->save();
 
-        return response()->json(['message' => 'Email verified successfully.']);
+        return response()->json([
+            'message' => 'Email verified successfully.',
+            'already_verified' => false,
+        ]);
     }
 
     public function resendVerificationEmail(Request $request)
@@ -338,10 +437,14 @@ class AuthController extends Controller
         $verificationToken = Str::random(64);
         $user->update(['verification_token' => $verificationToken]);
 
-        $verificationUrl = config('app.frontend_url', 'http://localhost:3000') . '/verify-email?token=' . $verificationToken . '&email=' . urlencode($user->email);
+        $verificationUrl = $this->buildVerificationUrl($user, $verificationToken);
+        $mailSent = $this->sendMailMessage($user, new WelcomeVerification($user, $verificationUrl), 'resend_verification');
 
-        Mail::to($user)->send(new WelcomeVerification($user, $verificationUrl));
-
-        return response()->json(['message' => 'Verification email resent.']);
+        return response()->json([
+            'message' => $mailSent
+                ? 'Verification email resent.'
+                : 'We could not resend the verification email. Please try again.',
+            'email_sent' => $mailSent,
+        ], $mailSent ? 200 : 500);
     }
 }

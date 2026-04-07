@@ -28,6 +28,7 @@ class User extends Authenticatable implements MustVerifyEmail
         'last_name',
         'email',
         'password',
+        'password_changed_at',
         'role',
         'phone',
         'country',
@@ -75,6 +76,7 @@ class User extends Authenticatable implements MustVerifyEmail
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'password_changed_at' => 'datetime',
             'is_active' => 'boolean',
             'last_login_at' => 'datetime',
             'two_factor_expires_at' => 'datetime',

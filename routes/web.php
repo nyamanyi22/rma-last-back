@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Setting;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/test', function () {
@@ -8,7 +9,7 @@ Route::get('/test', function () {
 
 Route::get('/', function () {
     return response()->json([
-        'message' => 'RMA System API',
+        'message' => Setting::portalName() . ' API',
         'version' => '1.0.0',
         'status' => 'running',
         'endpoints' => [

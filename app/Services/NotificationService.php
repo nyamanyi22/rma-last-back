@@ -7,6 +7,7 @@ use App\Models\User;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\AdminNewRmaNotification;
 use App\Mail\AdminHighPriorityRmaNotification;
+use App\Mail\AdminRmaStatusChangedNotification;
 use App\Enums\RMAPriority;
 
 use App\Notifications\AdminRMANotification;
@@ -14,6 +15,10 @@ use Illuminate\Support\Facades\Notification;
 
 class NotificationService
 {
+    public function __construct(private readonly EmailService $mailService)
+    {
+    }
+
     /**
      * Send notification for new RMA submission
      */
@@ -38,16 +43,38 @@ class NotificationService
             'created_by_name' => $rma->customer->full_name,
         ]));
 
-        // Send instant email notification to admins
-        $admins = $staff->filter(fn($u) => $u->isAdmin());
-        foreach ($admins as $admin) {
-            Mail::to($admin->email)->queue(new AdminNewRmaNotification($rma));
+        // Send instant email notification to staff
+        foreach ($staff as $staffMember) {
+            $this->mailService->queue(
+                $staffMember->email,
+                new AdminNewRmaNotification($rma),
+                EmailService::STAFF_NEW_RMA,
+                'staff_new_rma_alert',
+                [
+                    'rma_id' => $rma->id,
+                    'rma_number' => $rma->rma_number,
+                    'staff_email' => $staffMember->email,
+                ],
+                true
+            );
         }
 
         // Special alert for high priority
+        $admins = $staff->filter(fn($u) => $u->isAdmin());
         if ($this->isHighPriority($rma)) {
             foreach ($admins as $admin) {
-                Mail::to($admin->email)->queue(new AdminHighPriorityRmaNotification($rma));
+                $this->mailService->queue(
+                    $admin->email,
+                    new AdminHighPriorityRmaNotification($rma),
+                    EmailService::STAFF_HIGH_PRIORITY_RMA,
+                    'staff_high_priority_rma_alert',
+                    [
+                        'rma_id' => $rma->id,
+                        'rma_number' => $rma->rma_number,
+                        'staff_email' => $admin->email,
+                    ],
+                    true
+                );
             }
         }
 
@@ -76,6 +103,23 @@ class NotificationService
                 'action_url' => "/admin/rma",
                 'created_by_name' => $changer->full_name,
             ]));
+        }
+
+        foreach ($staff as $staffMember) {
+            $this->mailService->send(
+                $staffMember->email,
+                new AdminRmaStatusChangedNotification($rma, $oldStatus, $newStatusLabel, $changer->full_name),
+                EmailService::STAFF_RMA_STATUS_CHANGE,
+                'staff_rma_status_alert',
+                [
+                    'rma_id' => $rma->id,
+                    'rma_number' => $rma->rma_number,
+                    'staff_email' => $staffMember->email,
+                    'old_status' => $oldStatus,
+                    'new_status' => $newStatusLabel,
+                ],
+                true
+            );
         }
 
         \Log::info("Status change notification processed for RMA #{$rma->rma_number}");

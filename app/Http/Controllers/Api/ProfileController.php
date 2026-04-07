@@ -3,11 +3,10 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\User;
+use App\Models\Setting;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
 class ProfileController extends Controller
 {
@@ -31,6 +30,7 @@ class ProfileController extends Controller
                 'city' => $user->city,
                 'postal_code' => $user->postal_code,
                 'role' => $user->role,
+                'password_changed_at' => $user->password_changed_at,
             ]
         ]);
     }
@@ -80,6 +80,34 @@ class ProfileController extends Controller
                 'role_label' => $user->role_label,
                 'short_role_label' => $user->short_role_label,
             ]
+        ]);
+    }
+
+    /**
+     * Update authenticated user's password
+     */
+    public function updatePassword(Request $request)
+    {
+        $user = $request->user();
+        $minLength = Setting::minPasswordLength();
+
+        $validated = $request->validate([
+            'current_password' => 'required|string',
+            'new_password' => 'required|string|min:' . $minLength . '|confirmed',
+        ]);
+
+        if (!Hash::check($validated['current_password'], $user->password)) {
+            return response()->json([
+                'message' => 'Current password is incorrect.',
+            ], 422);
+        }
+
+        $user->password = Hash::make($validated['new_password']);
+        $user->password_changed_at = now();
+        $user->save();
+
+        return response()->json([
+            'message' => 'Password updated successfully.',
         ]);
     }
 }
